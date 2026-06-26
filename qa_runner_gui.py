@@ -54,7 +54,7 @@ class QAWorkerApp:
     def __init__(self, root):
         self.root = root
         self.root.title('QA TC Runner - 자동 검증')
-        self.root.geometry('700x600')
+        self.root.geometry('780x850')
         self.root.resizable(False, False)
         self.running = False
         self._build_ui()
@@ -420,7 +420,7 @@ class QAWorkerApp:
                 os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(base_path, 'ms-playwright')
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=False)
-                ctx = browser.new_context(viewport={'width':1440,'height':900})
+                ctx = browser.new_context(viewport={'width':1920,'height':1080})
                 page = ctx.new_page()
 
                 # 로그인
@@ -543,7 +543,7 @@ JSON: {{"actions":[{{"type":"click","selector":"button:has-text('조회')","desc
                         # 스크린샷
                         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
                             ss_path = f.name
-                        page.screenshot(path=ss_path, full_page=False)
+                        page.screenshot(path=ss_path, full_page=True)
 
                         # GPT-4o 판정
                         with open(ss_path,'rb') as f:
