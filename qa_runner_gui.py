@@ -269,6 +269,11 @@ class QAWorkerApp:
             self.status_var.set(f'0 / {len(tcs)} 완료')
 
             from playwright.sync_api import sync_playwright
+            import sys, os
+            # PyInstaller 번들 실행 시 Chromium 경로 설정
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+                os.environ['PLAYWRIGHT_BROWSERS_PATH'] = os.path.join(base_path, 'ms-playwright')
             with sync_playwright() as p:
                 browser = p.chromium.launch(headless=False)
                 ctx = browser.new_context(viewport={'width':1440,'height':900})
