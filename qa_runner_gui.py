@@ -232,7 +232,8 @@ class QAWorkerApp:
         try:
             ec2 = self.ec2_var.get().rstrip('/')
             selected = self.session_var.get()
-            session_id = self.session_map.get(selected, 0)
+            info = self.session_map.get(selected, {})
+            session_id = info.get('id', 0) if isinstance(info, dict) else 0
             if not session_id:
                 messagebox.showwarning('알림', '먼저 세션을 선택하세요')
                 return
@@ -284,7 +285,8 @@ class QAWorkerApp:
         try:
             ec2 = self.ec2_var.get().rstrip('/')
             selected = self.session_var.get()
-            session_id = self.session_map.get(selected, 0)
+            info = self.session_map.get(selected, {})
+            session_id = info.get('id', 0) if isinstance(info, dict) else 0
             if not session_id:
                 messagebox.showwarning('알림', '먼저 세션을 선택하세요')
                 return
