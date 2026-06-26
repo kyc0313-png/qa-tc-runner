@@ -375,7 +375,6 @@ class QAWorkerApp:
             self.log_msg(f'🌐 STG: {stg_base}', 'info')
             priority = self.priority_var.get()
             limit = int(self.limit_var.get() or 0)
-            stg_base = stg_cfg['base']
 
             client = openai.OpenAI(api_key=api_key)
 
