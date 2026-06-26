@@ -112,10 +112,19 @@ class QAWorkerApp:
             values=list(STG_CONFIGS.keys()), state='readonly',
             font=('맑은 고딕', 10), width=38), 2)
 
-        # 세션 ID
+        # 세션 불러오기
+        sess_frame = tk.Frame(frame, bg=BG)
         self.session_var = tk.StringVar(value='')
-        row('세션 ID', lambda f: tk.Entry(f, textvariable=self.session_var,
-            font=('맑은 고딕', 10), width=40), 3)
+        self.session_combo = ttk.Combobox(sess_frame, textvariable=self.session_var,
+            font=('맑은 고딕', 10), width=30, state='readonly')
+        self.session_combo.pack(side='left')
+        tk.Button(sess_frame, text='🔄 불러오기', font=('맑은 고딕', 9),
+            bg='#E3F2FD', fg='#1565C0', bd=0, padx=8, pady=4,
+            cursor='hand2', command=self.load_sessions).pack(side='left', padx=(6,0))
+        tk.Label(frame, text='세션 선택', font=('맑은 고딕', 10), bg=BG,
+                 fg='#444', width=14, anchor='e').grid(row=3, column=0, pady=5, sticky='e')
+        sess_frame.grid(row=3, column=1, pady=5, padx=(8,0), sticky='ew')
+        self.session_map = {}  # 표시명 → ID
 
         # 우선순위
         self.priority_var = tk.StringVar(value='P1')
@@ -176,9 +185,33 @@ class QAWorkerApp:
         self.log.see('end')
         self.log.configure(state='disabled')
 
+    def load_sessions(self):
+        try:
+            ec2 = self.ec2_var.get().rstrip('/')
+            resp = requests.get(f'{ec2}/api/sessions', timeout=5)
+            sessions = resp.json()
+            self.session_map = {}
+            names = []
+            for s in sessions:
+                total = s.get('total_tc', 0)
+                ap = s.get('ai_pass', 0)
+                af = s.get('ai_fail', 0)
+                mp = s.get('manual_pass', 0)
+                label = f"[{s['id']}] {s['name']} (TC {total}건 | 🤖{ap+af} 👤{mp})"
+                self.session_map[label] = s['id']
+                names.append(label)
+            self.session_combo['values'] = names
+            if names:
+                self.session_combo.current(0)
+                self.session_var.set(names[0])
+            self.log_msg(f'✅ 세션 {len(sessions)}개 로드됨', 'info')
+        except Exception as e:
+            messagebox.showerror('오류', f'세션 불러오기 실패: {e}')
+
     def start_worker(self):
-        if not self.session_var.get():
-            messagebox.showerror('오류', '세션 ID를 입력하세요')
+        selected = self.session_var.get()
+        if not selected:
+            messagebox.showerror('오류', '세션을 선택하세요. 불러오기 버튼을 먼저 클릭하세요')
             return
         if not self.key_var.get():
             messagebox.showerror('오류', 'OpenAI API 키를 입력하세요')
@@ -200,7 +233,11 @@ class QAWorkerApp:
             ec2 = self.ec2_var.get().rstrip('/')
             api_key = self.key_var.get()
             service = self.service_var.get()
-            session_id = int(self.session_var.get())
+            selected = self.session_var.get()
+            session_id = self.session_map.get(selected, 0)
+            if not session_id:
+                try: session_id = int(selected)
+                except: raise ValueError('세션을 선택하세요')
             priority = self.priority_var.get()
             limit = int(self.limit_var.get() or 0)
             stg_cfg = STG_CONFIGS.get(service, STG_CONFIGS['닥터바이스 어드민'])
