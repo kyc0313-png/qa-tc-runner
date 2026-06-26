@@ -19,7 +19,7 @@ jobs:
 
     - name: 패키지 설치
       run: |
-        pip install pyinstaller playwright openai requests
+        pip install pyinstaller playwright openai requests Pillow
 
     - name: Playwright Chromium 설치
       run: |
