@@ -8,20 +8,8 @@ import threading, os, sys, json, base64, re, requests, tempfile
 
 # ── 설정 ──────────────────────────────────────
 EC2_API = 'http://54.180.98.47'
-STG_CONFIGS = {
-    '닥터바이스 어드민': {
-        'base': 'https://staging-admin.doctorvice.co.kr',
-        'login': True,
-        'id': 'test@ikoob.com',
-        'pw': 'test1234!'
-    },
-    '닥터바이스 클리닉': {
-        'base': 'https://staging-clinic.doctorvice.co.kr',
-        'login': False,
-        'id': '',
-        'pw': ''
-    },
-}
+# STG 설정은 세션에서 자동으로 가져옴 (하드코딩 없음)
+STG_CONFIGS = {}
 SHEET_URL_MAP = {
     '병원관리자':        '/contract/list',
     '병원관리자_계정생성':'/hospital/list',
@@ -106,11 +94,14 @@ class QAWorkerApp:
         row('OpenAI API 키', lambda f: tk.Entry(f, textvariable=self.key_var,
             font=('맑은 고딕', 10), show='*', width=40), 1)
 
-        # 서비스 선택
-        self.service_var = tk.StringVar(value='닥터바이스 어드민')
-        row('서비스', lambda f: ttk.Combobox(f, textvariable=self.service_var,
-            values=list(STG_CONFIGS.keys()), state='readonly',
-            font=('맑은 고딕', 10), width=38), 2)
+        # STG URL (세션에서 자동으로 가져옴 - 표시용)
+        self.stg_url_var = tk.StringVar(value='세션 선택 후 자동 설정됩니다')
+        stg_label = tk.Entry(frame, textvariable=self.stg_url_var,
+            font=('맑은 고딕', 10), width=40, state='readonly',
+            readonlybackground='#F5F5F5', fg='#888')
+        tk.Label(frame, text='STG URL', font=('맑은 고딕', 10), bg=BG,
+                 fg='#444', width=14, anchor='e').grid(row=2, column=0, pady=5, sticky='e')
+        stg_label.grid(row=2, column=1, pady=5, padx=(8,0), sticky='ew')
 
         # 세션 불러오기
         sess_frame = tk.Frame(frame, bg=BG)
@@ -118,6 +109,7 @@ class QAWorkerApp:
         self.session_combo = ttk.Combobox(sess_frame, textvariable=self.session_var,
             font=('맑은 고딕', 10), width=30, state='readonly')
         self.session_combo.pack(side='left')
+        self.session_combo.bind('<<ComboboxSelected>>', self.on_session_select)
         tk.Button(sess_frame, text='🔄 불러오기', font=('맑은 고딕', 9),
             bg='#E3F2FD', fg='#1565C0', bd=0, padx=8, pady=4,
             cursor='hand2', command=self.load_sessions).pack(side='left', padx=(6,0))
@@ -126,18 +118,63 @@ class QAWorkerApp:
         sess_frame.grid(row=3, column=1, pady=5, padx=(8,0), sticky='ew')
         self.session_map = {}  # 표시명 → ID
 
+        # 시트 선택
+        sheet_frame = tk.Frame(frame, bg=BG)
+        self.sheet_var = tk.StringVar(value='전체')
+        self.sheet_combo = ttk.Combobox(sheet_frame, textvariable=self.sheet_var,
+            values=['전체'], state='readonly', font=('맑은 고딕', 10), width=30)
+        self.sheet_combo.pack(side='left')
+        tk.Button(sheet_frame, text='🔄', font=('맑은 고딕', 9),
+            bg='#E3F2FD', fg='#1565C0', bd=0, padx=6, pady=4,
+            cursor='hand2', command=self.load_sheets).pack(side='left', padx=(4,0))
+        tk.Label(frame, text='시트 선택', font=('맑은 고딕', 10), bg=BG,
+                 fg='#444', width=14, anchor='e').grid(row=4, column=0, pady=5, sticky='e')
+        sheet_frame.grid(row=4, column=1, pady=5, padx=(8,0), sticky='ew')
+
         # 우선순위
         self.priority_var = tk.StringVar(value='P1')
         row('우선순위 필터', lambda f: ttk.Combobox(f, textvariable=self.priority_var,
-            values=['P1', 'P2', 'P1+P2', '전체'], state='readonly',
-            font=('맑은 고딕', 10), width=38), 4)
+            values=['P1', 'P2', 'P3', 'P4', 'P1+P2', 'P1+P2+P3', '전체'], state='readonly',
+            font=('맑은 고딕', 10), width=38), 5)
 
         # 최대 건수
         self.limit_var = tk.StringVar(value='0')
         row('최대 건수', lambda f: tk.Entry(f, textvariable=self.limit_var,
-            font=('맑은 고딕', 10), width=40), 5)
+            font=('맑은 고딕', 10), width=40), 6)
         tk.Label(frame, text='(0 = 전체)', font=('맑은 고딕', 9),
-                 bg=BG, fg='#aaa').grid(row=5, column=2, padx=4)
+                 bg=BG, fg='#aaa').grid(row=6, column=2, padx=4)
+
+        # TC 목록 체크박스 영역
+        tc_frame = tk.LabelFrame(self.root, text=' TC 선택 (비우면 전체 실행) ', 
+                                  font=('맑은 고딕', 10), bg=BG, fg='#444', padx=8, pady=6)
+        tc_frame.pack(fill='x', padx=20, pady=(0, 6))
+
+        tc_top = tk.Frame(tc_frame, bg=BG)
+        tc_top.pack(fill='x', pady=(0,4))
+        tk.Button(tc_top, text='📋 TC 목록 불러오기', font=('맑은 고딕', 9),
+            bg='#E8F5E9', fg='#2E7D32', bd=0, padx=10, pady=4,
+            cursor='hand2', command=self.load_tc_list).pack(side='left')
+        tk.Button(tc_top, text='✅ 전체 선택', font=('맑은 고딕', 9),
+            bg='#F5F5F5', fg='#444', bd=0, padx=8, pady=4,
+            cursor='hand2', command=self.select_all_tc).pack(side='left', padx=4)
+        tk.Button(tc_top, text='☐ 전체 해제', font=('맑은 고딕', 9),
+            bg='#F5F5F5', fg='#444', bd=0, padx=8, pady=4,
+            cursor='hand2', command=self.deselect_all_tc).pack(side='left')
+        self.tc_count_label = tk.Label(tc_top, text='0건', font=('맑은 고딕', 9),
+            bg=BG, fg='#888')
+        self.tc_count_label.pack(side='right')
+
+        # 체크박스 스크롤 영역
+        tc_scroll_frame = tk.Frame(tc_frame, bg=BG)
+        tc_scroll_frame.pack(fill='both', expand=True)
+        tc_scrollbar = tk.Scrollbar(tc_scroll_frame)
+        tc_scrollbar.pack(side='right', fill='y')
+        self.tc_listbox = tk.Listbox(tc_scroll_frame, font=('맑은 고딕', 9),
+            height=5, bg='#FAFAFA', selectmode='multiple',
+            yscrollcommand=tc_scrollbar.set)
+        self.tc_listbox.pack(side='left', fill='both', expand=True)
+        tc_scrollbar.config(command=self.tc_listbox.yview)
+        self.tc_data = []  # TC 목록 저장
 
         # 버튼
         btn_frame = tk.Frame(self.root, bg=BG)
@@ -185,6 +222,82 @@ class QAWorkerApp:
         self.log.see('end')
         self.log.configure(state='disabled')
 
+    def on_session_select(self, event=None):
+        selected = self.session_var.get()
+        info = self.session_map.get(selected, {})
+        stg_url = info.get('stg_url','') if isinstance(info, dict) else ''
+        self.stg_url_var.set(stg_url or '세션에 STG URL 없음')
+
+    def load_tc_list(self):
+        try:
+            ec2 = self.ec2_var.get().rstrip('/')
+            selected = self.session_var.get()
+            session_id = self.session_map.get(selected, 0)
+            if not session_id:
+                messagebox.showwarning('알림', '먼저 세션을 선택하세요')
+                return
+            sheet = self.sheet_var.get()
+            priority = self.priority_var.get()
+            url = f'{ec2}/api/sessions/{session_id}/tcs'
+            if sheet and sheet != '전체':
+                import urllib.parse
+                url += f'?sheet={urllib.parse.quote(sheet)}'
+            resp = requests.get(url, timeout=10)
+            all_tcs = resp.json()
+
+            # 우선순위 필터
+            if priority == 'P1': tcs = [t for t in all_tcs if t.get('priority')=='P1']
+            elif priority == 'P2': tcs = [t for t in all_tcs if t.get('priority')=='P2']
+            elif priority == 'P3': tcs = [t for t in all_tcs if t.get('priority')=='P3']
+            elif priority == 'P4': tcs = [t for t in all_tcs if t.get('priority')=='P4']
+            elif priority == 'P1+P2': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2')]
+            elif priority == 'P1+P2+P3': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2','P3')]
+            else: tcs = all_tcs
+
+            # 미검증만
+            tcs = [t for t in tcs if not t.get('result')]
+            self.tc_data = tcs
+
+            # 목록 표시
+            self.tc_listbox.delete(0, 'end')
+            for tc in tcs:
+                prio = tc.get('priority','?')
+                tc_id = tc.get('tc_id', tc.get('id','?'))
+                depth = tc.get('depth_path','')
+                parts = depth.split(' > ') if depth else []
+                label = parts[-1] if parts else f'TC {tc_id}'
+                self.tc_listbox.insert('end', f'[{prio}] TC{tc_id} - {label[:40]}')
+            # 전체 선택
+            self.tc_listbox.select_set(0, 'end')
+            self.tc_count_label.config(text=f'{len(tcs)}건')
+            self.log_msg(f'✅ TC {len(tcs)}건 로드됨 ({priority})', 'info')
+        except Exception as e:
+            messagebox.showerror('오류', f'TC 불러오기 실패: {e}')
+
+    def select_all_tc(self):
+        self.tc_listbox.select_set(0, 'end')
+
+    def deselect_all_tc(self):
+        self.tc_listbox.selection_clear(0, 'end')
+
+    def load_sheets(self):
+        try:
+            ec2 = self.ec2_var.get().rstrip('/')
+            selected = self.session_var.get()
+            session_id = self.session_map.get(selected, 0)
+            if not session_id:
+                messagebox.showwarning('알림', '먼저 세션을 선택하세요')
+                return
+            resp = requests.get(f'{ec2}/api/sessions/{session_id}/sheets', timeout=5)
+            sheets = resp.json()
+            names = ['전체'] + [s['name'] for s in sheets]
+            self.sheet_combo['values'] = names
+            self.sheet_combo.current(0)
+            self.sheet_var.set('전체')
+            self.log_msg(f'✅ 시트 {len(sheets)}개 로드됨', 'info')
+        except Exception as e:
+            messagebox.showerror('오류', f'시트 불러오기 실패: {e}')
+
     def load_sessions(self):
         try:
             ec2 = self.ec2_var.get().rstrip('/')
@@ -198,7 +311,10 @@ class QAWorkerApp:
                 af = s.get('ai_fail', 0)
                 mp = s.get('manual_pass', 0)
                 label = f"[{s['id']}] {s['name']} (TC {total}건 | 🤖{ap+af} 👤{mp})"
-                self.session_map[label] = s['id']
+                self.session_map[label] = {
+                    'id': s['id'],
+                    'stg_url': s.get('stg_url',''),
+                }
                 names.append(label)
             self.session_combo['values'] = names
             if names:
@@ -234,10 +350,21 @@ class QAWorkerApp:
             api_key = self.key_var.get()
             service = self.service_var.get()
             selected = self.session_var.get()
-            session_id = self.session_map.get(selected, 0)
+            info = self.session_map.get(selected, {})
+            session_id = info.get('id', 0) if isinstance(info, dict) else 0
             if not session_id:
-                try: session_id = int(selected)
-                except: raise ValueError('세션을 선택하세요')
+                raise ValueError('세션을 선택하세요')
+
+            # 세션 STG 설정 가져오기
+            cfg_resp = requests.get(f'{ec2}/api/sessions/{session_id}/config', timeout=5)
+            cfg = cfg_resp.json()
+            stg_base = cfg.get('stg_url','').rstrip('/')
+            stg_login = cfg.get('stg_login_required', True)
+            stg_id = cfg.get('stg_account','')
+            stg_pw = cfg.get('stg_password','')
+            if not stg_base:
+                raise ValueError('세션에 STG URL이 없습니다. 웹에서 세션 설정을 확인하세요')
+            self.log_msg(f'🌐 STG: {stg_base}', 'info')
             priority = self.priority_var.get()
             limit = int(self.limit_var.get() or 0)
             stg_cfg = STG_CONFIGS.get(service, STG_CONFIGS['닥터바이스 어드민'])
@@ -247,17 +374,28 @@ class QAWorkerApp:
 
             # TC 목록
             self.log_msg(f'📋 TC 목록 조회 중... (세션 {session_id})', 'info')
-            resp = requests.get(f'{ec2}/api/sessions/{session_id}/tcs', timeout=10)
-            tcs = resp.json()
-
-            # 필터
-            if priority == 'P1':
-                tcs = [t for t in tcs if t.get('priority') == 'P1']
-            elif priority == 'P2':
-                tcs = [t for t in tcs if t.get('priority') == 'P2']
-            elif priority == 'P1+P2':
-                tcs = [t for t in tcs if t.get('priority') in ('P1','P2')]
-            tcs = [t for t in tcs if not t.get('result')]
+            # 체크박스에서 선택된 TC 사용
+            selected_indices = list(self.tc_listbox.curselection())
+            if self.tc_data and selected_indices:
+                tcs = [self.tc_data[i] for i in selected_indices]
+                self.log_msg(f'📋 선택된 TC: {len(tcs)}건', 'info')
+            else:
+                # TC 목록 없으면 API에서 가져오기
+                sheet = self.sheet_var.get()
+                import urllib.parse
+                if sheet and sheet != '전체':
+                    resp = requests.get(f'{ec2}/api/sessions/{session_id}/tcs?sheet={urllib.parse.quote(sheet)}', timeout=10)
+                else:
+                    resp = requests.get(f'{ec2}/api/sessions/{session_id}/tcs', timeout=10)
+                all_tcs = resp.json()
+                if priority == 'P1': tcs = [t for t in all_tcs if t.get('priority')=='P1']
+                elif priority == 'P2': tcs = [t for t in all_tcs if t.get('priority')=='P2']
+                elif priority == 'P3': tcs = [t for t in all_tcs if t.get('priority')=='P3']
+                elif priority == 'P4': tcs = [t for t in all_tcs if t.get('priority')=='P4']
+                elif priority == 'P1+P2': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2')]
+                elif priority == 'P1+P2+P3': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2','P3')]
+                else: tcs = all_tcs
+                tcs = [t for t in tcs if not t.get('result')]
             if limit: tcs = tcs[:limit]
 
             if not tcs:
@@ -280,17 +418,17 @@ class QAWorkerApp:
                 page = ctx.new_page()
 
                 # 로그인
-                if stg_cfg['login']:
+                if stg_login and stg_id:
                     self.log_msg(f'🔐 {stg_base} 로그인 중...', 'info')
                     page.goto(f'{stg_base}/login', timeout=20000)
                     page.wait_for_load_state('networkidle', timeout=15000)
-                    page.fill('input[type="text"]', stg_cfg['id'])
-                    page.fill('input[type="password"]', stg_cfg['pw'])
+                    page.fill('input[type="text"]', stg_id)
+                    page.fill('input[type="password"]', stg_pw)
                     page.click('button[type="submit"]')
                     page.wait_for_load_state('networkidle', timeout=15000)
                     page.wait_for_timeout(1500)
                     if '/login' in page.url:
-                        self.log_msg('❌ 로그인 실패', 'fail')
+                        self.log_msg('❌ 로그인 실패 - ID/PW 확인하세요', 'fail')
                         browser.close()
                         self._done()
                         return
@@ -298,7 +436,7 @@ class QAWorkerApp:
                 else:
                     page.goto(stg_base, timeout=20000)
                     page.wait_for_load_state('networkidle', timeout=15000)
-                    self.log_msg(f'✅ {stg_base} 접속', 'pass')
+                    self.log_msg(f'✅ {stg_base} 접속 (로그인 없음)', 'pass')
 
                 results = {'PASS':0,'FAIL':0,'ERROR':0}
                 for i, tc in enumerate(tcs):
