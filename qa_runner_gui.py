@@ -171,8 +171,10 @@ class QAWorkerApp:
         tc_scrollbar.pack(side='right', fill='y')
         self.tc_listbox = tk.Listbox(tc_scroll_frame, font=('맑은 고딕', 9),
             height=5, bg='#FAFAFA', selectmode='multiple',
+            selectbackground='#1D9E75', selectforeground='white',
             yscrollcommand=tc_scrollbar.set)
         self.tc_listbox.pack(side='left', fill='both', expand=True)
+        self.tc_listbox.bind('<<ListboxSelect>>', self.on_tc_select)
         tc_scrollbar.config(command=self.tc_listbox.yview)
         self.tc_data = []  # TC 목록 저장
 
@@ -221,6 +223,11 @@ class QAWorkerApp:
         self.log.insert('end', msg + '\n', tag)
         self.log.see('end')
         self.log.configure(state='disabled')
+
+    def on_tc_select(self, event=None):
+        selected = len(self.tc_listbox.curselection())
+        total = self.tc_listbox.size()
+        self.tc_count_label.config(text=f'{selected}/{total}건 선택')
 
     def on_session_select(self, event=None):
         selected = self.session_var.get()
@@ -368,7 +375,6 @@ class QAWorkerApp:
             self.log_msg(f'🌐 STG: {stg_base}', 'info')
             priority = self.priority_var.get()
             limit = int(self.limit_var.get() or 0)
-            stg_cfg = STG_CONFIGS.get(service, STG_CONFIGS['닥터바이스 어드민'])
             stg_base = stg_cfg['base']
 
             client = openai.OpenAI(api_key=api_key)
@@ -404,7 +410,7 @@ class QAWorkerApp:
                 self._done()
                 return
 
-            self.log_msg(f'🎯 대상 TC: {len(tcs)}건 | {service} | {priority}', 'info')
+            self.log_msg(f'🎯 대상 TC: {len(tcs)}건 | {priority}', 'info')
             self.status_var.set(f'0 / {len(tcs)} 완료')
 
             from playwright.sync_api import sync_playwright
