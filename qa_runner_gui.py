@@ -350,7 +350,6 @@ class QAWorkerApp:
         try:
             ec2 = self.ec2_var.get().rstrip('/')
             api_key = self.key_var.get()
-            service = self.service_var.get()
             selected = self.session_var.get()
             info = self.session_map.get(selected, {})
             session_id = info.get('id', 0) if isinstance(info, dict) else 0
