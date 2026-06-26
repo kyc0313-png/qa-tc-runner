@@ -25,14 +25,21 @@ jobs:
       run: |
         playwright install chromium
 
-    - name: EXE 빌드
+    - name: Chromium 경로 확인
       run: |
+        python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
+
+    - name: EXE 빌드 (Chromium 포함)
+      run: |
+        $env:PLAYWRIGHT_BROWSERS_PATH = "$env:USERPROFILE\AppData\Local\ms-playwright"
+        $chromium_path = "$env:USERPROFILE\AppData\Local\ms-playwright"
         pyinstaller --onefile --windowed --name "QA_TC_Runner" `
           --hidden-import playwright `
           --hidden-import playwright.sync_api `
           --hidden-import openai `
           --hidden-import requests `
           --hidden-import tkinter `
+          --add-data "$chromium_path;ms-playwright" `
           --collect-all playwright `
           qa_runner_gui.py
 
