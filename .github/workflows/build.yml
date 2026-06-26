@@ -1,0 +1,44 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Python 설치
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: 패키지 설치
+      run: |
+        pip install pyinstaller playwright openai requests
+
+    - name: Playwright Chromium 설치
+      run: |
+        playwright install chromium
+
+    - name: EXE 빌드
+      run: |
+        pyinstaller --onefile --windowed --name "QA_TC_Runner" `
+          --hidden-import playwright `
+          --hidden-import playwright.sync_api `
+          --hidden-import openai `
+          --hidden-import requests `
+          --hidden-import tkinter `
+          --collect-all playwright `
+          qa_runner_gui.py
+
+    - name: EXE 업로드
+      uses: actions/upload-artifact@v4
+      with:
+        name: QA_TC_Runner_Windows
+        path: dist/QA_TC_Runner.exe
+        retention-days: 30
