@@ -11,6 +11,57 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'http://54.180.98.47'
+APP_VERSION = '1.4'
+GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
+
+def check_and_update():
+    """GitHub에서 최신 버전 확인 후 자동 업데이트"""
+    if not getattr(sys, 'frozen', False):
+        return  # 개발 환경에서는 스킵
+    try:
+        resp = requests.get(GITHUB_RELEASE_URL, timeout=5)
+        if resp.status_code != 200: return
+        data = resp.json()
+        latest_tag = data.get('tag_name','').lstrip('v')
+        if latest_tag and latest_tag != APP_VERSION:
+            # 다운로드 URL 찾기
+            assets = data.get('assets', [])
+            exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
+            if not exe_asset: return
+            download_url = exe_asset['browser_download_url']
+            exe_name = exe_asset['name']
+            
+            import tkinter as tk
+            from tkinter import messagebox
+            root_tmp = tk.Tk(); root_tmp.withdraw()
+            if messagebox.askyesno('업데이트 알림',
+                f'새 버전이 있습니다! (현재: v{APP_VERSION} → 최신: v{latest_tag})\n지금 다운로드할까요?'):
+                import urllib.request, subprocess
+                exe_path = sys.executable
+                new_path = exe_path + '.new'
+                bat_path = exe_path + '_update.bat'
+                
+                def download_progress(count, block_size, total_size):
+                    pct = int(count * block_size * 100 / total_size)
+                    print(f'\r다운로드: {pct}%', end='')
+                
+                urllib.request.urlretrieve(download_url, new_path, download_progress)
+                
+                # 배치 파일로 교체 후 재실행
+                bat_content = f"""@echo off
+timeout /t 2 /nobreak
+move /y "{new_path}" "{exe_path}"
+start "" "{exe_path}"
+del "%~f0"
+"""
+                with open(bat_path, 'w') as f:
+                    f.write(bat_content)
+                subprocess.Popen(['cmd', '/c', bat_path], creationflags=0x08000000)
+                sys.exit(0)
+            root_tmp.destroy()
+    except Exception as e:
+        pass  # 업데이트 실패해도 계속 실행
+
 # URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
 SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
 KEYWORD_URL_MAP = [
@@ -482,6 +533,8 @@ class QAWorkerApp:
                 )
                 ctx = browser.new_context(viewport={'width':1920,'height':1080})
                 page = ctx.new_page()
+                # beforeunload 팝업 자동 수락
+                page.on('dialog', lambda dialog: dialog.accept())
 
                 # 로그인 타입별 처리
                 login_type = cfg.get('login_type', 'idpw')
@@ -563,9 +616,14 @@ class QAWorkerApp:
                         current_url = page.url
                         need_navigate = True
 
-                        # 홈으로 이동 (사이드바 초기화)
+                        # 홈으로 이동 (사이드바 초기화) - beforeunload 팝업 무시
                         home_url = stg_base + '/'
-                        page.goto(home_url, timeout=20000)
+                        try:
+                            page.goto(home_url, timeout=20000, wait_until='domcontentloaded')
+                        except Exception:
+                            # 팝업으로 이동 실패 시 재시도
+                            page.evaluate("window.onbeforeunload = null")
+                            page.goto(home_url, timeout=20000)
                         page.wait_for_load_state('networkidle', timeout=15000)
                         page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
 
@@ -639,6 +697,10 @@ JSON: {{"actions":[
                             desc = action.get('description', atype)
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
+                            # 로그아웃/탈퇴 등 위험 액션 차단
+                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제']
+                            if any(w in desc.lower() or w in sel.lower() for w in danger_words):
+                                self.log_msg(f'  ⚠ 위험 액션 차단: {desc}', 'warn'); continue
 
                             if atype == 'click':
                                 if any(d in sel for d in dangerous):
@@ -793,6 +855,9 @@ JSON: {{"actions":[
 
 
 if __name__ == '__main__':
+    # 자동 업데이트 체크 (백그라운드)
+    import threading
+    threading.Thread(target=check_and_update, daemon=True).start()
     root = tk.Tk()
     app = QAWorkerApp(root)
     root.mainloop()
