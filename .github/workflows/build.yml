@@ -21,25 +21,22 @@ jobs:
       run: |
         pip install pyinstaller playwright openai requests Pillow
 
-    - name: Playwright 브라우저 전체 설치
+    - name: Playwright 브라우저 설치
       run: |
         playwright install chromium --with-deps
-        playwright install chrome --with-deps
 
-    - name: Chromium 경로 확인
+    - name: 버전 추출
+      id: version
+      shell: python
       run: |
-        python -c "
-        import subprocess, sys
-        result = subprocess.run(['playwright', 'install', '--list'], capture_output=True, text=True)
-        print(result.stdout)
-        import os
-        base = os.path.expanduser('~/AppData/Local/ms-playwright')
-        if os.path.exists(base):
-            for root, dirs, files in os.walk(base):
-                for f in files:
-                    if 'chrome' in f.lower() and f.endswith('.exe'):
-                        print(os.path.join(root, f))
-        "
+        import re, os
+        with open('qa_runner_gui.py', 'r', encoding='utf-8') as f:
+            content = f.read()
+        m = re.search(r"APP_VERSION\s*=\s*'([^']+)'", content)
+        version = m.group(1) if m else '1.0'
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+            f.write(f'version={version}\n')
+        print(f'버전: {version}')
 
     - name: EXE 빌드 (Chromium 포함)
       run: |
@@ -57,9 +54,28 @@ jobs:
           --add-data "$ms_playwright;ms-playwright" `
           qa_runner_gui.py
 
-    - name: EXE 업로드
+    - name: EXE 업로드 (Artifact)
       uses: actions/upload-artifact@v4
       with:
         name: QA_TC_Runner_Windows
         path: dist/QA_TC_Runner.exe
         retention-days: 30
+
+    - name: GitHub Release 생성 및 EXE 업로드
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ steps.version.outputs.version }}
+        name: QA TC Runner v${{ steps.version.outputs.version }}
+        body: |
+          ## QA TC Runner v${{ steps.version.outputs.version }}
+
+          ### 설치 방법
+          1. `QA_TC_Runner.exe` 다운로드
+          2. 실행 (Windows Defender 경고 시 "추가 정보 → 실행" 클릭)
+
+          ### 자동 업데이트
+          이전 버전 실행 시 새 버전 알림이 표시됩니다.
+        files: dist/QA_TC_Runner.exe
+        make_latest: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
