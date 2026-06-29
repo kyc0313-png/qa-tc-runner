@@ -34,9 +34,9 @@ jobs:
             content = f.read()
         m = re.search(r"APP_VERSION\s*=\s*'([^']+)'", content)
         version = m.group(1) if m else '1.0'
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
             f.write(f'version={version}\n')
-        print(f'버전: {version}')
+        print(f'Version: {version}')
 
     - name: EXE 빌드 (Chromium 포함)
       run: |
@@ -69,12 +69,12 @@ jobs:
         body: |
           ## QA TC Runner v${{ steps.version.outputs.version }}
 
-          ### 설치 방법
-          1. QA_TC_Runner.exe 다운로드
-          2. 실행 (Windows Defender 경고 시 "추가 정보 → 실행" 클릭)
+          ### How to install
+          1. Download QA_TC_Runner.exe
+          2. Run (if Windows Defender warning, click "More info -> Run anyway")
 
-          ### 자동 업데이트
-          이전 버전 실행 시 새 버전 알림이 표시됩니다.
+          ### Auto Update
+          When running an older version, an update notification will appear.
         artifacts: dist/QA_TC_Runner.exe
         allowUpdates: true
         makeLatest: true
