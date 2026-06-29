@@ -69,7 +69,7 @@ class QAWorkerApp:
     def __init__(self, root):
         self.root = root
         self.root.title('QA TC Runner - 자동 검증')
-        self.root.geometry('1200x900')
+        self.root.geometry('560x900')
         self.root.resizable(True, True)
         self.running = False
         self.session_map = {}
@@ -82,13 +82,9 @@ class QAWorkerApp:
         ACCENT = '#1D9E75'
         self.root.configure(bg=BG)
 
-        # 좌우 분할 PanedWindow
-        paned = tk.PanedWindow(self.root, orient='horizontal', sashwidth=5, bg='#d0cdc5')
-        paned.pack(fill='both', expand=True)
-
-        # ── 좌측: 설정 패널 ──
-        left = tk.Frame(paned, bg=BG, width=420)
-        paned.add(left, minsize=350)
+        # 단순 레이아웃
+        left = tk.Frame(self.root, bg=BG)
+        left.pack(fill='both', expand=True)
 
         tk.Label(left, text='🤖 QA TC Runner', font=('맑은 고딕',15,'bold'),
                  bg=BG, fg='#1a1a1a').pack(pady=(12,2))
@@ -230,52 +226,9 @@ class QAWorkerApp:
         self.log.tag_config('info', foreground='#82B1FF')
         self.log.tag_config('warn', foreground='#FFD740')
 
-        # ── 우측: 결과 뷰어 ──
-        right = tk.Frame(paned, bg='#ECEFF1')
-        paned.add(right, minsize=400)
-
-        tk.Label(right, text='검증 결과 뷰어', font=('맑은 고딕',12,'bold'),
-                 bg='#ECEFF1', fg='#37474F').pack(pady=(12,4))
-
-        # TC 정보
-        self.tc_info_var = tk.StringVar(value='검증 시작 후 결과가 여기에 표시됩니다')
-        tk.Label(right, textvariable=self.tc_info_var,
-                 font=('맑은 고딕',10), bg='#ECEFF1', fg='#546E7A',
-                 wraplength=550).pack(pady=(0,6), padx=10)
-
-        # 판정 결과
-        self.judgment_var = tk.StringVar(value='')
-        self.judgment_label = tk.Label(right, textvariable=self.judgment_var,
-                 font=('맑은 고딕',12,'bold'), bg='#ECEFF1', fg='#333')
-        self.judgment_label.pack(pady=(0,4))
-
-        # 판정 근거
-        self.reason_var = tk.StringVar(value='')
-        tk.Label(right, textvariable=self.reason_var,
-                 font=('맑은 고딕',9), bg='#ECEFF1', fg='#546E7A',
-                 wraplength=550, justify='left').pack(pady=(0,8), padx=10)
-
-        # 스크린샷 프레임 (전/후 나란히)
-        ss_container = tk.Frame(right, bg='#ECEFF1')
-        ss_container.pack(fill='both', expand=True, padx=10, pady=(0,10))
-
-        # 전 (Before)
-        before_f = tk.LabelFrame(ss_container, text=' 🔵 액션 전 ', font=('맑은 고딕',10),
-                                  bg='#ECEFF1', fg='#1565C0')
-        before_f.pack(side='left', fill='both', expand=True, padx=(0,4))
-        self.before_label = tk.Label(before_f, text='스크린샷 없음',
-                                      bg='#CFD8DC', fg='#90A4AE',
-                                      font=('맑은 고딕',9))
-        self.before_label.pack(fill='both', expand=True, padx=4, pady=4)
-
-        # 후 (After)
-        after_f = tk.LabelFrame(ss_container, text=' 🟢 액션 후 ', font=('맑은 고딕',10),
-                                  bg='#ECEFF1', fg='#2E7D32')
-        after_f.pack(side='left', fill='both', expand=True, padx=(4,0))
-        self.after_label = tk.Label(after_f, text='스크린샷 없음',
-                                     bg='#CFD8DC', fg='#90A4AE',
-                                     font=('맑은 고딕',9))
-        self.after_label.pack(fill='both', expand=True, padx=4, pady=4)
+        # 결과는 웹 대시보드에서 확인
+        self.before_label = None
+        self.after_label = None
 
     def log_msg(self, msg, tag=''):
         self.log.configure(state='normal')
@@ -284,37 +237,8 @@ class QAWorkerApp:
         self.log.configure(state='disabled')
 
     def update_viewer(self, tc_info, judgment, reason, before_b64, after_b64):
-        """결과 뷰어 업데이트 (메인 스레드에서 호출)"""
-        self.tc_info_var.set(tc_info)
-        if judgment == 'PASS':
-            self.judgment_var.set('✅ PASS - 적합')
-            self.judgment_label.config(fg='#2E7D32')
-        elif judgment == 'FAIL':
-            self.judgment_var.set('❌ FAIL - 부적합 (검토 필요)')
-            self.judgment_label.config(fg='#C62828')
-        else:
-            self.judgment_var.set(f'⚠ {judgment}')
-            self.judgment_label.config(fg='#E65100')
-        self.reason_var.set(reason[:200] if reason else '')
-        self.current_photos = []
-
-        # Before 이미지
-        if before_b64:
-            photo = b64_to_photoimage(before_b64, 460, 350)
-            if photo:
-                self.before_label.config(image=photo, text='')
-                self.current_photos.append(photo)
-        else:
-            self.before_label.config(image='', text='(액션 전 캡처 없음)')
-
-        # After 이미지
-        if after_b64:
-            photo2 = b64_to_photoimage(after_b64, 460, 350)
-            if photo2:
-                self.after_label.config(image=photo2, text='')
-                self.current_photos.append(photo2)
-        else:
-            self.after_label.config(image='', text='(액션 후 캡처)')
+        """결과는 웹 대시보드에서 확인"""
+        pass
 
     def on_session_select(self, event=None):
         selected = self.session_var.get()
@@ -478,8 +402,7 @@ class QAWorkerApp:
 
             with sync_playwright() as p:
                 browser = p.chromium.launch(
-                    headless=True,
-                    args=['--no-sandbox','--disable-dev-shm-usage','--disable-gpu']
+                    headless=False
                 )
                 ctx = browser.new_context(viewport={'width':1920,'height':1080})
                 page = ctx.new_page()
@@ -684,13 +607,16 @@ JSON: {{"actions":[
                         reason = parsed.get('reason','')
                         if judgment not in ('PASS','FAIL'): judgment='FAIL'
 
-                        # EC2 전송
-                        requests.put(f'{ec2}/api/results/{tc["id"]}', json={
+                        # EC2 전송 (전/후 스크린샷 포함)
+                        payload = {
                             'result': judgment, 'result_type': 'ai',
                             'memo': '', 'ai_judgment': judgment,
                             'ai_reason': reason[:1000],
                             'screenshot_b64': after_b64,
-                        }, timeout=30)
+                        }
+                        if before_b64:
+                            payload['screenshot_before_b64'] = before_b64
+                        requests.put(f'{ec2}/api/results/{tc["id"]}', json=payload, timeout=30)
 
                         results[judgment] = results.get(judgment,0)+1
                         tag = 'pass' if judgment=='PASS' else 'fail'
