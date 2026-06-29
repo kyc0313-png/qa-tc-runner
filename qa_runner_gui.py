@@ -460,6 +460,22 @@ class QAWorkerApp:
             self.status_var.set(f'0 / {len(tcs)} 완료')
 
             from playwright.sync_api import sync_playwright
+            import sys, os, glob
+
+            # PyInstaller 번들 시 Chromium 경로 자동 설정
+            if getattr(sys, 'frozen', False):
+                base_path = sys._MEIPASS
+                ms_playwright = os.path.join(base_path, 'ms-playwright')
+                if os.path.exists(ms_playwright):
+                    os.environ['PLAYWRIGHT_BROWSERS_PATH'] = ms_playwright
+                    self.log_msg(f'  Chromium 경로: {ms_playwright}', 'info')
+                else:
+                    # 대안: 사용자 AppData에서 찾기
+                    user_playwright = os.path.join(os.environ.get('LOCALAPPDATA',''),
+                        'ms-playwright')
+                    if os.path.exists(user_playwright):
+                        os.environ['PLAYWRIGHT_BROWSERS_PATH'] = user_playwright
+
             with sync_playwright() as p:
                 browser = p.chromium.launch(
                     headless=True,
