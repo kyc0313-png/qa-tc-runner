@@ -421,7 +421,13 @@ class QAWorkerApp:
 
             # 세션 STG 설정
             cfg = requests.get(f'{ec2}/api/sessions/{session_id}/config', timeout=5).json()
-            stg_base = cfg.get('stg_url','').rstrip('/')
+            stg_url_raw = cfg.get('stg_url','').strip()
+            # URL 자동 보정
+            stg_url_raw = stg_url_raw.replace('https://https://', 'https://')
+            stg_url_raw = stg_url_raw.replace('http://http://', 'http://')
+            if stg_url_raw and not stg_url_raw.startswith('http'):
+                stg_url_raw = 'https://' + stg_url_raw
+            stg_base = stg_url_raw.rstrip('/')
             stg_login = cfg.get('stg_login_required', True)
             stg_id = cfg.get('stg_account','')
             stg_pw = cfg.get('stg_password','')
@@ -479,9 +485,16 @@ class QAWorkerApp:
                 ctx = browser.new_context(viewport={'width':1920,'height':1080})
                 page = ctx.new_page()
 
-                # 로그인
-                if stg_login and stg_id:
-                    self.log_msg(f'🔐 로그인 중...', 'info')
+                # 로그인 타입별 처리
+                login_type = cfg.get('login_type', 'idpw')
+                stg_extra_raw = cfg.get('stg_extra', '')
+                try:
+                    stg_extra = json.loads(stg_extra_raw) if stg_extra_raw else {}
+                except: stg_extra = {}
+
+                if login_type == 'idpw' and stg_id:
+                    # ① ID/PW 로그인
+                    self.log_msg(f'🔐 ID/PW 로그인 중...', 'info')
                     page.goto(f'{stg_base}/login', timeout=20000)
                     page.wait_for_load_state('networkidle', timeout=15000)
                     page.fill('input[type="text"]', stg_id)
@@ -490,13 +503,50 @@ class QAWorkerApp:
                     page.wait_for_load_state('networkidle', timeout=15000)
                     page.wait_for_timeout(1500)
                     if '/login' in page.url:
-                        self.log_msg('❌ 로그인 실패', 'fail')
+                        self.log_msg('❌ 로그인 실패 - ID/PW 확인하세요', 'fail')
                         browser.close(); self._done(); return
                     self.log_msg('✅ 로그인 성공', 'pass')
-                else:
+
+                elif login_type == 'token':
+                    # ② 비일만사 토큰 방식
+                    doctor_id = stg_extra.get('doctor_id', 'doctor2000')
+                    hospital_id = stg_extra.get('hospital_id', '')
+                    self.log_msg(f'🔐 비일만사 로그인 중... (의사ID: {doctor_id})', 'info')
                     page.goto(stg_base, timeout=20000)
                     page.wait_for_load_state('networkidle', timeout=15000)
-                    self.log_msg(f'✅ {stg_base} 접속', 'pass')
+                    page.wait_for_timeout(1500)
+                    # 의사 ID 드롭다운 선택
+                    try:
+                        sel = page.locator('select').first
+                        if sel.is_visible(timeout=2000):
+                            sel.select_option(label=doctor_id)
+                            page.wait_for_timeout(500)
+                    except: pass
+                    # 병원 ID 입력
+                    if hospital_id:
+                        try:
+                            inp = page.locator('input').nth(1)
+                            if inp.is_visible(timeout=2000):
+                                inp.fill(hospital_id)
+                                page.wait_for_timeout(300)
+                        except: pass
+                    # 비일만시 버튼 클릭
+                    try:
+                        btn = page.locator('button:has-text("비일만시 가즈아")').first
+                        if not btn.is_visible(timeout=2000):
+                            btn = page.locator('button:has-text("비일만사")').first
+                        btn.click()
+                        page.wait_for_load_state('networkidle', timeout=15000)
+                        page.wait_for_timeout(2000)
+                        self.log_msg('✅ 비일만사 접속 성공', 'pass')
+                    except Exception as e:
+                        self.log_msg(f'⚠ 비일만사 버튼 오류: {e}', 'warn')
+
+                else:
+                    # ③ 로그인 없음
+                    page.goto(stg_base, timeout=20000)
+                    page.wait_for_load_state('networkidle', timeout=15000)
+                    self.log_msg(f'✅ {stg_base} 접속 (로그인 없음)', 'pass')
 
                 results = {'PASS':0,'FAIL':0,'ERROR':0}
                 for i, tc in enumerate(tcs):
