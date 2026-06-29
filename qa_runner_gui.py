@@ -11,71 +11,8 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'http://54.180.98.47'
-# 어드민 URL 매핑
-ADMIN_URL_MAP = {
-    '병원관리자':            '/contract/list',
-    '병원관리자_계정생성':    '/hospital/list',
-    '병원관리자_계정관리':    '/hospital/list',
-    '병원관리자_병원정보':    '/hospital/list',
-    '서비스 관리_클리닉':     '/service/clinic-notice/list',
-    '서비스 관리_App':       '/service/care-notice/list',
-    '문진 관리':             '/medical-management',
-    '포인트':                '/point/clinic-point-history/list',
-    '상담 관리':             '/care/user-list',
-}
-
-# 클리닉 URL 매핑
-CLINIC_URL_MAP = {
-    'GNB_내 정보':           '/my-info',
-    'GNB_전체환자':          '/patient/whole-patient',
-    'GNB_환자관리':          '/patient/manage-patients',
-    'GNB_교육자료':          '/education/education',
-    'GNB_고객센터':          '/customer-center/main',
-    '내 정보':               '/my-info',
-    '전체환자':              '/patient/whole-patient',
-    '환자관리':              '/patient/manage-patients',
-    '교육자료':              '/education/education',
-    '모니터링':              '/monitoring/blood-sugar',
-    '고객센터':              '/customer-center/main',
-}
-
-# 랩커넥트 URL 매핑
-LABCONNECT_URL_MAP = {
-    '환자 목록':             '/patients',
-    '검사결과':              '/results',
-    '접수 목록':             '/receptions',
-    '공지':                  '/notices',
-    '병원 사용자':           '/hospital-users',
-    '병원 목록':             '/hospitals',
-    '기기 목록':             '/devices',
-    '통계':                  '/statistics',
-}
-
-# 키워드 기반 URL 매핑 (클리닉)
-CLINIC_KEYWORD_MAP = [
-    ('내 정보',     '/my-info'),
-    ('전체 환자',   '/patient/whole-patient'),
-    ('관리 환자',   '/patient/manage-patients'),
-    ('교육',        '/education/education'),
-    ('모니터링',    '/monitoring/blood-sugar'),
-    ('혈당',        '/monitoring/blood-sugar'),
-    ('혈압',        '/monitoring/blood-pressure'),
-    ('고객센터',    '/customer-center/main'),
-    ('자가진단',    '/medical-management'),
-]
-
-# 키워드 기반 URL 매핑 (랩커넥트)
-LABCONNECT_KEYWORD_MAP = [
-    ('환자',        '/patients'),
-    ('검사결과',    '/results'),
-    ('접수',        '/receptions'),
-    ('공지',        '/notices'),
-    ('병원 사용자', '/hospital-users'),
-    ('기기',        '/devices'),
-    ('통계',        '/statistics'),
-]
-
-SHEET_URL_MAP = ADMIN_URL_MAP  # 기본값 (하위 호환)
+# URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
+SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
 KEYWORD_URL_MAP = [
     ('공지사항', '/service/clinic-notice/list'),
     ('문진', '/medical-management'),
@@ -91,42 +28,76 @@ def clean_text(text):
     s = str(text).replace('\n',' ').replace('\r',' ').replace('\t',' ').replace('ㄴ',' ')
     return re.sub(r'\s+',' ',s).strip()
 
-def detect_service(stg_base):
-    """STG URL 기반으로 서비스 종류 감지"""
-    if 'clinic' in stg_base.lower():
-        return 'clinic'
-    if 'labconnect' in stg_base.lower():
-        return 'labconnect'
-    return 'admin'
+def navigate_by_menu(page, stg_base, depth_path):
+    """
+    기능 경로를 분석해서 메뉴를 순서대로 클릭하며 이동
+    예: "GNB_내 정보 > 병원 현황 > [조회] 버튼 클릭"
+    → 홈으로 이동 후 "내 정보" 메뉴 클릭 → "병원 현황" 클릭
+    반환: 탐색에 사용한 경로 (마지막 액션 제외)
+    """
+    if not depth_path:
+        return []
+
+    # > 로 분리
+    parts = [p.strip() for p in depth_path.split('>') if p.strip()]
+    # 마지막이 실제 액션이면 제외 (→ 포함 or 버튼클릭 등)
+    nav_parts = []
+    for p in parts:
+        # 액션성 파트 (마지막에 → 가 있거나 [버튼] 클릭 패턴)
+        if '→' in p or ('[' in p and ('클릭' in p or '선택' in p or '입력' in p)):
+            break
+        nav_parts.append(p)
+
+    if not nav_parts:
+        return []
+
+    done = []
+    for menu_text in nav_parts:
+        # GNB_ 접두사 제거
+        menu_text = re.sub(r'^GNB_', '', menu_text).strip()
+        # 숫자. 접두사 제거
+        menu_text = re.sub(r'^\d+\.\s*', '', menu_text).strip()
+        if not menu_text: continue
+
+        # 다양한 셀렉터로 메뉴 찾기
+        clicked = False
+        selectors = [
+            f'nav a:has-text("{menu_text}")',
+            f'aside a:has-text("{menu_text}")',
+            f'.sidebar a:has-text("{menu_text}")',
+            f'a:has-text("{menu_text}")',
+            f'li:has-text("{menu_text}")',
+            f'span:has-text("{menu_text}")',
+        ]
+        for sel in selectors:
+            try:
+                el = page.locator(sel).first
+                if el.is_visible(timeout=2000):
+                    el.click()
+                    page.wait_for_load_state('networkidle', timeout=8000)
+                    page.wait_for_timeout(800)
+                    done.append(menu_text)
+                    clicked = True
+                    break
+            except: continue
+
+        if not clicked:
+            # 텍스트 포함 요소 폴백
+            try:
+                el = page.get_by_text(menu_text, exact=False).first
+                if el.is_visible(timeout=2000):
+                    el.click()
+                    page.wait_for_load_state('networkidle', timeout=8000)
+                    page.wait_for_timeout(800)
+                    done.append(f'{menu_text}(폴백)')
+                    clicked = True
+            except: pass
+
+    return done
 
 def get_target_url(stg_base, sheet_name, depth_path, expected=''):
-    sheet = (sheet_name or '').strip()
-    service = detect_service(stg_base)
-    cleaned = clean_text(depth_path) + ' ' + clean_text(expected)
-
-    if service == 'clinic':
-        if sheet in CLINIC_URL_MAP:
-            return stg_base + CLINIC_URL_MAP[sheet]
-        for key, path in CLINIC_KEYWORD_MAP:
-            if key in cleaned:
-                return stg_base + path
-        return stg_base + '/patient/whole-patient'
-
-    elif service == 'labconnect':
-        if sheet in LABCONNECT_URL_MAP:
-            return stg_base + LABCONNECT_URL_MAP[sheet]
-        for key, path in LABCONNECT_KEYWORD_MAP:
-            if key in cleaned:
-                return stg_base + path
-        return stg_base + '/patients'
-
-    else:  # admin
-        if sheet in ADMIN_URL_MAP:
-            return stg_base + ADMIN_URL_MAP[sheet]
-        for key, path in KEYWORD_URL_MAP:
-            if key in cleaned:
-                return stg_base + path
-        return stg_base + '/contract/list'
+    """메뉴 탐색 방식에서는 항상 홈(루트)으로 이동"""
+    return stg_base + '/'  # 홈에서 시작 후 메뉴 탐색
 
 def needs_before_after(depth_path, verify_type):
     """전후 스크린샷이 필요한 TC 유형"""
@@ -520,11 +491,16 @@ class QAWorkerApp:
                     self.log_msg(f'\n[{i+1}/{len(tcs)}] TC {tc_id} | {tc.get("priority","?")} | {sheet}', 'info')
 
                     try:
-                        target_url = get_target_url(stg_base, sheet, depth, tc.get('expected',''))
-                        self.log_msg(f'  → {target_url}')
-                        page.goto(target_url, timeout=20000)
+                        # 홈으로 이동 후 메뉴 탐색
+                        home_url = stg_base + '/'
+                        page.goto(home_url, timeout=20000)
                         page.wait_for_load_state('networkidle', timeout=15000)
-                        page.wait_for_timeout(2000)
+                        page.wait_for_timeout(1000)
+
+                        # 기능 경로로 메뉴 탐색
+                        nav_done = navigate_by_menu(page, stg_base, depth)
+                        if nav_done:
+                            self.log_msg(f'  🧭 메뉴 탐색: {" > ".join(nav_done)}')
                         self.log_msg(f'  🌐 이동: {page.url}')
 
                         # 전후 스크린샷 필요 여부
