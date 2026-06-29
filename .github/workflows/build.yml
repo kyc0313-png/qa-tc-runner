@@ -62,20 +62,20 @@ jobs:
         retention-days: 30
 
     - name: GitHub Release 생성 및 EXE 업로드
-      uses: softprops/action-gh-release@v2
+      uses: ncipollo/release-action@v1
       with:
-        tag_name: v${{ steps.version.outputs.version }}
+        tag: v${{ steps.version.outputs.version }}
         name: QA TC Runner v${{ steps.version.outputs.version }}
         body: |
           ## QA TC Runner v${{ steps.version.outputs.version }}
 
           ### 설치 방법
-          1. `QA_TC_Runner.exe` 다운로드
+          1. QA_TC_Runner.exe 다운로드
           2. 실행 (Windows Defender 경고 시 "추가 정보 → 실행" 클릭)
 
           ### 자동 업데이트
           이전 버전 실행 시 새 버전 알림이 표시됩니다.
-        files: dist/QA_TC_Runner.exe
-        make_latest: true
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        artifacts: dist/QA_TC_Runner.exe
+        allowUpdates: true
+        makeLatest: true
+        token: ${{ secrets.GITHUB_TOKEN }}
