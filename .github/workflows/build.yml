@@ -21,26 +21,40 @@ jobs:
       run: |
         pip install pyinstaller playwright openai requests Pillow
 
-    - name: Playwright Chromium 설치
+    - name: Playwright 브라우저 전체 설치
       run: |
-        playwright install chromium
+        playwright install chromium --with-deps
+        playwright install chrome --with-deps
 
     - name: Chromium 경로 확인
       run: |
-        python -c "from playwright.sync_api import sync_playwright; p = sync_playwright().start(); print(p.chromium.executable_path); p.stop()"
+        python -c "
+        import subprocess, sys
+        result = subprocess.run(['playwright', 'install', '--list'], capture_output=True, text=True)
+        print(result.stdout)
+        import os
+        base = os.path.expanduser('~/AppData/Local/ms-playwright')
+        if os.path.exists(base):
+            for root, dirs, files in os.walk(base):
+                for f in files:
+                    if 'chrome' in f.lower() and f.endswith('.exe'):
+                        print(os.path.join(root, f))
+        "
 
     - name: EXE 빌드 (Chromium 포함)
       run: |
-        $env:PLAYWRIGHT_BROWSERS_PATH = "$env:USERPROFILE\AppData\Local\ms-playwright"
-        $chromium_path = "$env:USERPROFILE\AppData\Local\ms-playwright"
+        $ms_playwright = "$env:USERPROFILE\AppData\Local\ms-playwright"
         pyinstaller --onefile --windowed --name "QA_TC_Runner" `
           --hidden-import playwright `
           --hidden-import playwright.sync_api `
           --hidden-import openai `
           --hidden-import requests `
           --hidden-import tkinter `
-          --add-data "$chromium_path;ms-playwright" `
+          --hidden-import PIL `
+          --hidden-import PIL.Image `
+          --hidden-import PIL.ImageTk `
           --collect-all playwright `
+          --add-data "$ms_playwright;ms-playwright" `
           qa_runner_gui.py
 
     - name: EXE 업로드
