@@ -280,8 +280,24 @@ class QAWorkerApp:
         mf = tk.Frame(frame, bg=BG)
         mf.grid(row=6, column=1, pady=4, padx=(6,0), sticky='ew')
         self.limit_var = tk.StringVar(value='0')
-        tk.Entry(mf, textvariable=self.limit_var, font=('맑은 고딕',10), width=10).pack(side='left')
-        tk.Label(mf, text='(0=전체)', font=('맑은 고딕',9), bg=BG, fg='#aaa').pack(side='left', padx=4)
+        limit_entry = tk.Entry(mf, textvariable=self.limit_var, font=('맑은 고딕',10), width=10)
+        limit_entry.pack(side='left')
+        self.time_est_label = tk.Label(mf, text='(0=전체, 최대 500건)', font=('맑은 고딕',9), bg=BG, fg='#aaa')
+        self.time_est_label.pack(side='left', padx=4)
+        def on_limit_change(*args):
+            try:
+                n = int(self.limit_var.get() or 0)
+                if n > 500:
+                    self.limit_var.set('500')
+                    n = 500
+                if n == 0:
+                    self.time_est_label.config(text='(0=전체, 최대 500건)', fg='#aaa')
+                else:
+                    mins_min = n * 30 // 60
+                    mins_max = n * 60 // 60
+                    self.time_est_label.config(text=f'약 {mins_min}~{mins_max}분 소요', fg='#E65100')
+            except: pass
+        self.limit_var.trace_add('write', on_limit_change)
 
         # TC 선택
         tc_frame = tk.LabelFrame(left, text=' TC 선택 ', font=('맑은 고딕',10),
@@ -426,7 +442,10 @@ class QAWorkerApp:
             elif priority == 'P1+P2': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2')]
             elif priority == 'P1+P2+P3': tcs = [t for t in all_tcs if t.get('priority') in ('P1','P2','P3')]
             else: tcs = all_tcs
+            # 미검증 TC만 표시
+            tcs_all = tcs[:]
             tcs = [t for t in tcs if not t.get('result')]
+            done_count = len(tcs_all) - len(tcs)
             self.tc_data = tcs
             self.tc_listbox.delete(0,'end')
             for tc in tcs:
@@ -438,7 +457,10 @@ class QAWorkerApp:
                 self.tc_listbox.insert('end', f'[{prio}] TC{tc_id} - {label}')
             self.tc_listbox.select_set(0,'end')
             self.tc_count_label.config(text=f'{len(tcs)}/{len(tcs)}건 선택')
-            self.log_msg(f'✅ TC {len(tcs)}건 로드됨 ({priority})', 'info')
+            skip_msg = f' (완료 {done_count}건 제외)' if done_count > 0 else ''
+            self.log_msg(f'✅ TC {len(tcs)}건 로드됨 ({priority}){skip_msg}', 'info')
+            if len(tcs) == 0:
+                self.log_msg(f'🎉 {priority} TC 모두 검증 완료!', 'pass')
         except Exception as e:
             messagebox.showerror('오류', f'TC 불러오기 실패: {e}')
 
