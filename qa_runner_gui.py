@@ -31,20 +31,16 @@ def clean_text(text):
 def navigate_by_menu(page, stg_base, depth_path):
     """
     기능 경로를 분석해서 메뉴를 순서대로 클릭하며 이동
-    예: "GNB_내 정보 > 병원 현황 > [조회] 버튼 클릭"
-    → 홈으로 이동 후 "내 정보" 메뉴 클릭 → "병원 현황" 클릭
-    반환: 탐색에 사용한 경로 (마지막 액션 제외)
+    URL 맵 없이 사이드바/GNB에서 텍스트로 메뉴 탐색
     """
     if not depth_path:
         return []
 
-    # > 로 분리
+    # > 로 분리 후 액션 파트 제외
     parts = [p.strip() for p in depth_path.split('>') if p.strip()]
-    # 마지막이 실제 액션이면 제외 (→ 포함 or 버튼클릭 등)
     nav_parts = []
     for p in parts:
-        # 액션성 파트 (마지막에 → 가 있거나 [버튼] 클릭 패턴)
-        if '→' in p or ('[' in p and ('클릭' in p or '선택' in p or '입력' in p)):
+        if '→' in p or ('[' in p and any(k in p for k in ['클릭','선택','입력','확인'])):
             break
         nav_parts.append(p)
 
@@ -52,46 +48,70 @@ def navigate_by_menu(page, stg_base, depth_path):
         return []
 
     done = []
-    for menu_text in nav_parts:
-        # GNB_ 접두사 제거
-        menu_text = re.sub(r'^GNB_', '', menu_text).strip()
-        # 숫자. 접두사 제거
-        menu_text = re.sub(r'^\d+\.\s*', '', menu_text).strip()
-        if not menu_text: continue
+    prev_url = page.url
 
-        # 다양한 셀렉터로 메뉴 찾기
+    for menu_text in nav_parts:
+        # 불필요한 접두사 제거
+        menu_text = re.sub(r'^GNB_', '', menu_text).strip()
+        menu_text = re.sub(r'^[0-9]+[.\-]\s*', '', menu_text).strip()
+        # 괄호 안 내용 제거 (예: "병원관리자 (병원계약관리)" → "병원관리자")
+        menu_clean = re.sub(r'\s*\([^)]*\)', '', menu_text).strip()
+        if not menu_clean: continue
+
         clicked = False
-        selectors = [
-            f'nav a:has-text("{menu_text}")',
-            f'aside a:has-text("{menu_text}")',
-            f'.sidebar a:has-text("{menu_text}")',
-            f'a:has-text("{menu_text}")',
-            f'li:has-text("{menu_text}")',
-            f'span:has-text("{menu_text}")',
-        ]
-        for sel in selectors:
+
+        # 1차: 사이드바/nav에서 정확한 텍스트로 찾기
+        for sel in [
+            f'nav >> text="{menu_clean}"',
+            f'aside >> text="{menu_clean}"',
+            f'[class*="sidebar"] >> text="{menu_clean}"',
+            f'[class*="gnb"] >> text="{menu_clean}"',
+            f'[class*="menu"] >> text="{menu_clean}"',
+        ]:
             try:
                 el = page.locator(sel).first
                 if el.is_visible(timeout=2000):
+                    el.scroll_into_view_if_needed()
                     el.click()
-                    page.wait_for_load_state('networkidle', timeout=8000)
-                    page.wait_for_timeout(800)
-                    done.append(menu_text)
-                    clicked = True
-                    break
+                    page.wait_for_timeout(1500)
+                    try: page.wait_for_load_state('networkidle', timeout=5000)
+                    except: pass
+                    if page.url != prev_url:
+                        prev_url = page.url
+                        done.append(f'{menu_clean}')
+                        clicked = True
+                        break
+                    else:
+                        done.append(f'{menu_clean}(클릭)')
+                        clicked = True
+                        break
             except: continue
 
+        # 2차: has-text 셀렉터로 폴백
         if not clicked:
-            # 텍스트 포함 요소 폴백
-            try:
-                el = page.get_by_text(menu_text, exact=False).first
-                if el.is_visible(timeout=2000):
-                    el.click()
-                    page.wait_for_load_state('networkidle', timeout=8000)
-                    page.wait_for_timeout(800)
-                    done.append(f'{menu_text}(폴백)')
-                    clicked = True
-            except: pass
+            for sel in [
+                f'a:has-text("{menu_clean}")',
+                f'li:has-text("{menu_clean}")',
+                f'button:has-text("{menu_clean}")',
+                f'span:has-text("{menu_clean}")',
+            ]:
+                try:
+                    els = page.locator(sel).all()
+                    for el in els[:3]:
+                        if el.is_visible(timeout=1000):
+                            el.scroll_into_view_if_needed()
+                            el.click()
+                            page.wait_for_timeout(1500)
+                            try: page.wait_for_load_state('networkidle', timeout=5000)
+                            except: pass
+                            done.append(f'{menu_clean}(폴백)')
+                            clicked = True
+                            break
+                    if clicked: break
+                except: continue
+
+        if not clicked:
+            done.append(f'{menu_clean}(실패)')
 
     return done
 
@@ -491,17 +511,22 @@ class QAWorkerApp:
                     self.log_msg(f'\n[{i+1}/{len(tcs)}] TC {tc_id} | {tc.get("priority","?")} | {sheet}', 'info')
 
                     try:
-                        # 홈으로 이동 후 메뉴 탐색
+                        # 현재 URL 확인 - 이미 올바른 페이지면 재이동 불필요
+                        current_url = page.url
+                        need_navigate = True
+
+                        # 홈으로 이동 (사이드바 초기화)
                         home_url = stg_base + '/'
                         page.goto(home_url, timeout=20000)
                         page.wait_for_load_state('networkidle', timeout=15000)
-                        page.wait_for_timeout(1000)
+                        page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
 
                         # 기능 경로로 메뉴 탐색
                         nav_done = navigate_by_menu(page, stg_base, depth)
                         if nav_done:
-                            self.log_msg(f'  🧭 메뉴 탐색: {" > ".join(nav_done)}')
+                            self.log_msg(f'  🧭 메뉴: {" > ".join(nav_done)}')
                         self.log_msg(f'  🌐 이동: {page.url}')
+                        page.wait_for_timeout(1000)
 
                         # 전후 스크린샷 필요 여부
                         do_before_after = needs_before_after(depth, verify_type)
