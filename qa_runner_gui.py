@@ -120,10 +120,8 @@ def get_target_url(stg_base, sheet_name, depth_path, expected=''):
     return stg_base + '/'  # 홈에서 시작 후 메뉴 탐색
 
 def needs_before_after(depth_path, verify_type):
-    """전후 스크린샷이 필요한 TC 유형"""
-    if '[입력전후_스크린샷]' in (depth_path or ''):
-        return True
-    return verify_type in ('INPUT', 'CLICK', 'RADIO', 'POPUP')
+    """전후 스크린샷 - 모든 TC에 찍음"""
+    return True
 
 def b64_to_photoimage(b64_str, max_w=480, max_h=320):
     """base64 → PIL → PhotoImage"""
