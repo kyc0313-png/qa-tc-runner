@@ -451,8 +451,12 @@ class QAWorkerApp:
                         before_b64 = None
                         actions_done = []
 
-                        # ── 액션 전 스크린샷 ──
+                        # ── 액션 전 스크린샷 (새로고침으로 초기 상태 확보) ──
                         if do_before_after:
+                            # 페이지 새로고침으로 이전 액션 상태 초기화
+                            page.reload()
+                            page.wait_for_load_state('networkidle', timeout=10000)
+                            page.wait_for_timeout(1500)
                             with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
                                 before_path = f.name
                             page.screenshot(path=before_path, full_page=True)
