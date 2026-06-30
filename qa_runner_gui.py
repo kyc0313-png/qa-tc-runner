@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '2.0'
+APP_VERSION = '2.1'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -54,18 +54,33 @@ def do_update(download_url, root):
     exe_path = sys.executable
     new_path = exe_path + '.new'
     bat_path = exe_path + '_update.bat'
+
+    # 이전 실패한 .new 잔여물 정리
+    if os.path.exists(new_path):
+        try: os.remove(new_path)
+        except: pass
+
     urllib.request.urlretrieve(download_url, new_path)
+
     bat_content = f"""@echo off
-timeout /t 2 /nobreak
-move /y "{new_path}" "{exe_path}"
+echo Updating, please wait...
+:retry
+timeout /t 3 /nobreak >nul
+move /y "{new_path}" "{exe_path}" >nul 2>&1
+if exist "{new_path}" (
+    timeout /t 2 /nobreak >nul
+    goto retry
+)
 start "" "{exe_path}"
 del "%~f0"
 """
     with open(bat_path, 'w') as f:
         f.write(bat_content)
-    subprocess.Popen(['cmd', '/c', bat_path], creationflags=0x08000000)
+    # 창을 띄워서 사용자가 진행 상황을 볼 수 있게 함
+    subprocess.Popen(['cmd', '/c', bat_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
+    root.quit()
     root.destroy()
-    sys.exit(0)
+    os._exit(0)  # sys.exit 대신 강제 종료로 프로세스 핸들 즉시 해제
 
 # URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
 SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
