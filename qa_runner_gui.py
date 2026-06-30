@@ -11,72 +11,61 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '1.7'
+APP_VERSION = '1.9'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
-def check_and_update():
-    """GitHub에서 최신 버전 확인 후 자동 업데이트"""
-    import traceback
+def get_latest_release_info():
+    """GitHub 최신 릴리즈 정보 조회 (네트워크만, UI 없음)"""
     log_path = os.path.join(tempfile.gettempdir(), 'qa_update_check.log')
     def dbg(msg):
         try:
             with open(log_path, 'a', encoding='utf-8') as f:
                 f.write(f'{msg}\n')
         except: pass
-
-    dbg(f'=== 업데이트 체크 시작 (현재버전: {APP_VERSION}) ===')
-    if not getattr(sys, 'frozen', False):
-        dbg('개발 환경 - 스킵')
-        return
+    import traceback
+    dbg(f'=== 업데이트 체크 시작 (현재버전: {APP_VERSION}, frozen: {getattr(sys, "frozen", False)}) ===')
     try:
         resp = requests.get(GITHUB_RELEASE_URL, timeout=10)
         dbg(f'응답 코드: {resp.status_code}')
         if resp.status_code != 200:
-            dbg(f'응답 실패: {resp.text[:200]}')
-            return
+            dbg(f'응답 실패: {resp.text[:300]}')
+            return None
         data = resp.json()
         latest_tag = data.get('tag_name','').lstrip('v')
         dbg(f'최신 태그: {latest_tag}')
-        if latest_tag and latest_tag != APP_VERSION:
-            dbg(f'업데이트 필요: {APP_VERSION} -> {latest_tag}')
-            # 다운로드 URL 찾기
-            assets = data.get('assets', [])
-            exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
-            if not exe_asset: return
-            download_url = exe_asset['browser_download_url']
-            exe_name = exe_asset['name']
-            
-            import tkinter as tk
-            from tkinter import messagebox
-            root_tmp = tk.Tk(); root_tmp.withdraw()
-            if messagebox.askyesno('업데이트 알림',
-                f'새 버전이 있습니다! (현재: v{APP_VERSION} → 최신: v{latest_tag})\n지금 다운로드할까요?'):
-                import urllib.request, subprocess
-                exe_path = sys.executable
-                new_path = exe_path + '.new'
-                bat_path = exe_path + '_update.bat'
-                
-                def download_progress(count, block_size, total_size):
-                    pct = int(count * block_size * 100 / total_size)
-                    print(f'\r다운로드: {pct}%', end='')
-                
-                urllib.request.urlretrieve(download_url, new_path, download_progress)
-                
-                # 배치 파일로 교체 후 재실행
-                bat_content = f"""@echo off
+        if not latest_tag or latest_tag == APP_VERSION:
+            dbg('이미 최신 버전')
+            return None
+        assets = data.get('assets', [])
+        exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
+        if not exe_asset:
+            dbg('exe 에셋을 찾을 수 없음')
+            return None
+        dbg(f'업데이트 발견: {APP_VERSION} -> {latest_tag}')
+        return {'version': latest_tag, 'url': exe_asset['browser_download_url']}
+    except Exception as e:
+        dbg(f'예외 발생: {e}')
+        dbg(traceback.format_exc())
+        return None
+
+def do_update(download_url, root):
+    """메인 스레드에서 호출되는 실제 업데이트 다운로드 + 교체"""
+    import urllib.request, subprocess
+    exe_path = sys.executable
+    new_path = exe_path + '.new'
+    bat_path = exe_path + '_update.bat'
+    urllib.request.urlretrieve(download_url, new_path)
+    bat_content = f"""@echo off
 timeout /t 2 /nobreak
 move /y "{new_path}" "{exe_path}"
 start "" "{exe_path}"
 del "%~f0"
 """
-                with open(bat_path, 'w') as f:
-                    f.write(bat_content)
-                subprocess.Popen(['cmd', '/c', bat_path], creationflags=0x08000000)
-                sys.exit(0)
-            root_tmp.destroy()
-    except Exception as e:
-        dbg(f'예외 발생: {e}')
-        dbg(traceback.format_exc())
+    with open(bat_path, 'w') as f:
+        f.write(bat_content)
+    subprocess.Popen(['cmd', '/c', bat_path], creationflags=0x08000000)
+    root.destroy()
+    sys.exit(0)
 
 # URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
 SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
@@ -148,42 +137,65 @@ def find_best_menu_match(target_text, menu_texts):
         return best
     return None
 
-def navigate_by_menu(page, stg_base, depth_path, log_fn=None):
+def navigate_by_menu(page, stg_base, depth_path, log_fn=None, sheet_name=None):
     """
-    실제 화면의 클릭 가능한 메뉴와 TC 기능경로를 매칭해서 순서대로 클릭.
-    설명성 텍스트(서비스명/화면명)는 실제 메뉴에 없으면 자동 스킵.
+    TC 기능경로 전체를 후보 텍스트 풀로 변환한 뒤,
+    화면의 실제 클릭 가능한 메뉴와 순서대로 매칭/클릭한다.
+    한 파트가 매칭 안 돼도 break 하지 않고 다음 파트를 계속 시도한다
+    (설명문 안에 메뉴명이 섞여 있는 경우도 놓치지 않기 위함).
     """
     if not depth_path:
         return []
 
-    parts = [p.strip() for p in depth_path.split('>') if p.strip()]
-    nav_parts = []
-    for p in parts:
-        if '→' in p or ('[' in p and any(k in p for k in ['클릭','선택','입력','확인'])):
-            break
-        nav_parts.append(p)
-
-    if not nav_parts:
+    raw_parts = [p.strip() for p in depth_path.split('>') if p.strip()]
+    if not raw_parts:
         return []
+
+    def build_candidates(part_text):
+        """한 파트에서 메뉴 후보 텍스트들을 우선순위대로 추출"""
+        cands = []
+        # 1) 대괄호 안 텍스트 (가장 신뢰도 높음 - 명시적으로 강조된 메뉴/버튼명)
+        for b in re.findall(r'\[([^\]]+)\]', part_text):
+            b_clean = b.strip()
+            if b_clean and len(b_clean) <= 20:
+                cands.append(b_clean)
+        # 2) 괄호/대괄호/접두사 제거한 파트 원문 (순수 메뉴 경로용)
+        clean = re.sub(r'\[[^\]]*\]', '', part_text)        # 대괄호 내용 제거
+        clean = re.sub(r'\([^)]*\)', '', clean)               # 괄호 내용 제거
+        clean = re.sub(r'^GNB[ _]', '', clean).strip()
+        clean = re.sub(r'^[0-9]+[.\-]\s*', '', clean).strip()
+        # 끝에 붙은 동작어(버튼/클릭/선택/확인/노출 등)는 메뉴명이 아니므로 제거
+        clean = re.sub(r'(버튼|카테고리|클릭|선택|입력|확인|노출|화면|이동)+\s*$', '', clean).strip()
+        if clean and 1 <= len(clean) <= 20 and clean not in cands:
+            cands.append(clean)
+        return cands
 
     done = []
     prev_url = page.url
 
-    for raw_text in nav_parts:
+    for part in raw_parts:
         try: page.wait_for_load_state('networkidle', timeout=4000)
         except: pass
-        page.wait_for_timeout(400)  # 약간의 딜레이로 렌더링 안정화
+        page.wait_for_timeout(300)
 
-        # 현재 화면의 실제 메뉴 텍스트 수집
-        menu_texts = get_visible_menu_texts(page)
-        match = find_best_menu_match(raw_text, menu_texts)
-
-        if not match:
-            done.append(f'{raw_text}(메뉴없음-스킵)')
-            if log_fn: log_fn(f'    ⏭ 실제 메뉴에 없음: "{raw_text}" → 스킵')
+        candidates = build_candidates(part)
+        if not candidates:
             continue
 
-        matched_text, el = match
+        menu_texts = get_visible_menu_texts(page)
+        matched = None
+        for cand in candidates:
+            m = find_best_menu_match(cand, menu_texts)
+            if m:
+                matched = (cand, m[0], m[1])
+                break
+
+        if not matched:
+            done.append(f'{candidates[0]}(메뉴없음-스킵)')
+            if log_fn: log_fn(f'    ⏭ 실제 메뉴에 없음: "{part[:30]}" → 스킵')
+            continue
+
+        cand_used, matched_text, el = matched
         try:
             el.scroll_into_view_if_needed()
             el.click()
@@ -195,10 +207,28 @@ def navigate_by_menu(page, stg_base, depth_path, log_fn=None):
                 done.append(matched_text)
             else:
                 done.append(f'{matched_text}(클릭)')
-            if log_fn: log_fn(f'    ✓ 메뉴 매칭: "{raw_text}" → "{matched_text}" 클릭')
-        except Exception as e:
+            if log_fn: log_fn(f'    ✓ 메뉴 매칭: "{cand_used}" → "{matched_text}" 클릭')
+        except Exception:
             done.append(f'{matched_text}(클릭실패)')
             if log_fn: log_fn(f'    ✗ 클릭 실패: "{matched_text}"')
+
+    # 전부 스킵/실패면 시트명으로 폴백 시도
+    success_count = sum(1 for d in done if '(메뉴없음-스킵)' not in d and '(클릭실패)' not in d)
+    if success_count == 0 and sheet_name:
+        sheet_clean = re.sub(r'^GNB[ _]', '', sheet_name).strip()
+        menu_texts = get_visible_menu_texts(page)
+        match = find_best_menu_match(sheet_clean, menu_texts)
+        if match:
+            matched_text, el = match
+            try:
+                el.scroll_into_view_if_needed()
+                el.click()
+                page.wait_for_timeout(1200)
+                try: page.wait_for_load_state('networkidle', timeout=5000)
+                except: pass
+                done.append(f'{matched_text}(시트명폴백)')
+                if log_fn: log_fn(f'    🔁 시트명 폴백: "{sheet_clean}" → "{matched_text}" 클릭')
+            except: pass
 
     return done
 
@@ -686,7 +716,7 @@ class QAWorkerApp:
                         page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
 
                         # 기능 경로로 메뉴 탐색
-                        nav_done = navigate_by_menu(page, stg_base, depth, log_fn=lambda m: self.log_msg(m))
+                        nav_done = navigate_by_menu(page, stg_base, depth, log_fn=lambda m: self.log_msg(m), sheet_name=sheet)
                         if nav_done:
                             self.log_msg(f'  🧭 메뉴: {" > ".join(nav_done)}')
                         self.log_msg(f'  🌐 이동: {page.url}')
@@ -912,10 +942,25 @@ JSON: {{"actions":[
         self.stop_btn.configure(state='disabled')
 
 
+def check_update_and_prompt(root):
+    """백그라운드 스레드에서 네트워크 체크 후, 결과를 메인 스레드 큐로 전달"""
+    info = get_latest_release_info()
+    if info:
+        root.after(0, lambda: prompt_update_ui(root, info))
+
+def prompt_update_ui(root, info):
+    """메인 스레드에서 안전하게 팝업 표시"""
+    if messagebox.askyesno('업데이트 알림',
+        f'새 버전이 있습니다! (현재: v{APP_VERSION} -> 최신: v{info["version"]})\n지금 업데이트할까요?'):
+        try:
+            do_update(info['url'], root)
+        except Exception as e:
+            messagebox.showerror('업데이트 실패', f'다운로드 중 오류: {e}')
+
 if __name__ == '__main__':
-    # 자동 업데이트 체크 (백그라운드)
-    import threading
-    threading.Thread(target=check_and_update, daemon=True).start()
     root = tk.Tk()
     app = QAWorkerApp(root)
+    # 자동 업데이트 체크 (백그라운드 네트워크 -> 메인스레드 UI)
+    import threading
+    threading.Thread(target=check_update_and_prompt, args=(root,), daemon=True).start()
     root.mainloop()
