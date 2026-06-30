@@ -10,8 +10,9 @@ from tkinter import ttk, messagebox, scrolledtext
 from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
-EC2_API = 'http://54.180.98.47'
-APP_VERSION = '1.4'
+# qa_runner_gui.py 수정
+EC2_API = 'https://qa.healthkoob.com'
+APP_VERSION = '1.5'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def check_and_update():
