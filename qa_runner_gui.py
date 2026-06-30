@@ -11,19 +11,34 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '1.6'
+APP_VERSION = '1.7'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def check_and_update():
     """GitHub에서 최신 버전 확인 후 자동 업데이트"""
+    import traceback
+    log_path = os.path.join(tempfile.gettempdir(), 'qa_update_check.log')
+    def dbg(msg):
+        try:
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(f'{msg}\n')
+        except: pass
+
+    dbg(f'=== 업데이트 체크 시작 (현재버전: {APP_VERSION}) ===')
     if not getattr(sys, 'frozen', False):
-        return  # 개발 환경에서는 스킵
+        dbg('개발 환경 - 스킵')
+        return
     try:
-        resp = requests.get(GITHUB_RELEASE_URL, timeout=5)
-        if resp.status_code != 200: return
+        resp = requests.get(GITHUB_RELEASE_URL, timeout=10)
+        dbg(f'응답 코드: {resp.status_code}')
+        if resp.status_code != 200:
+            dbg(f'응답 실패: {resp.text[:200]}')
+            return
         data = resp.json()
         latest_tag = data.get('tag_name','').lstrip('v')
+        dbg(f'최신 태그: {latest_tag}')
         if latest_tag and latest_tag != APP_VERSION:
+            dbg(f'업데이트 필요: {APP_VERSION} -> {latest_tag}')
             # 다운로드 URL 찾기
             assets = data.get('assets', [])
             exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
@@ -60,7 +75,8 @@ del "%~f0"
                 sys.exit(0)
             root_tmp.destroy()
     except Exception as e:
-        pass  # 업데이트 실패해도 계속 실행
+        dbg(f'예외 발생: {e}')
+        dbg(traceback.format_exc())
 
 # URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
 SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
