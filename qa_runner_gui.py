@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '2.2'
+APP_VERSION = '2.4'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -52,35 +52,65 @@ def do_update(download_url, root):
     """메인 스레드에서 호출되는 실제 업데이트 다운로드 + 교체"""
     import urllib.request, subprocess
     exe_path = sys.executable
+    exe_dir = os.path.dirname(exe_path)
+    exe_name = os.path.basename(exe_path)
     new_path = exe_path + '.new'
-    bat_path = exe_path + '_update.bat'
+    bat_path = os.path.join(exe_dir, '_qa_update.bat')
+    log_path = os.path.join(exe_dir, '_qa_update_result.log')
 
-    # 이전 실패한 .new 잔여물 정리
-    if os.path.exists(new_path):
-        try: os.remove(new_path)
-        except: pass
+    # 이전 실패 잔여물 정리
+    for p in (new_path, bat_path, log_path):
+        if os.path.exists(p):
+            try: os.remove(p)
+            except: pass
 
     urllib.request.urlretrieve(download_url, new_path)
+    if not os.path.exists(new_path):
+        raise Exception('다운로드 파일이 생성되지 않았습니다')
 
+    # PID로 현재 프로세스가 완전히 끝날 때까지 명시적으로 대기 (taskkill 보다 안전하게 polling)
+    pid = os.getpid()
     bat_content = f"""@echo off
-echo Updating, please wait...
+setlocal enabledelayedexpansion
+set "EXE_PATH={exe_path}"
+set "NEW_PATH={new_path}"
+set "LOG_PATH={log_path}"
+echo Waiting for app to close... > "%LOG_PATH%"
+
+:waitloop
+tasklist /fi "PID eq {pid}" 2>nul | find "{pid}" >nul
+if not errorlevel 1 (
+    timeout /t 1 /nobreak >nul
+    goto waitloop
+)
+
+echo Process closed, attempting move... >> "%LOG_PATH%"
+
+set RETRY=0
 :retry
-timeout /t 3 /nobreak >nul
-move /y "{new_path}" "{exe_path}" >nul 2>&1
-if exist "{new_path}" (
+if !RETRY! GEQ 15 (
+    echo FAILED after 15 retries >> "%LOG_PATH%"
+    goto end
+)
+move /y "%NEW_PATH%" "%EXE_PATH%" >> "%LOG_PATH%" 2>&1
+if exist "%NEW_PATH%" (
+    set /a RETRY+=1
     timeout /t 2 /nobreak >nul
     goto retry
 )
-start "" "{exe_path}"
+echo SUCCESS >> "%LOG_PATH%"
+start "" "%EXE_PATH%"
+
+:end
 del "%~f0"
 """
-    with open(bat_path, 'w') as f:
+    with open(bat_path, 'w', encoding='utf-8') as f:
         f.write(bat_content)
-    # 창을 띄워서 사용자가 진행 상황을 볼 수 있게 함
-    subprocess.Popen(['cmd', '/c', bat_path], creationflags=subprocess.CREATE_NEW_CONSOLE)
+
+    subprocess.Popen(['cmd', '/c', bat_path], cwd=exe_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
     root.quit()
     root.destroy()
-    os._exit(0)  # sys.exit 대신 강제 종료로 프로세스 핸들 즉시 해제
+    os._exit(0)
 
 # URL 매핑 없음 - 기능 경로 기반 메뉴 탐색 방식 사용
 SHEET_URL_MAP = {}  # 하위 호환용 빈 딕셔너리
@@ -690,10 +720,44 @@ class QAWorkerApp:
                         login_url = '/'
 
                     try:
-                        id_input = page.locator('input[type="text"], input[type="email"]').first
+                        # 1차: type 속성 기반
+                        id_input = None
+                        for sel in ['input[type="text"]', 'input[type="email"]', 'input[name*="id" i]', 'input[name*="email" i]']:
+                            try:
+                                cand = page.locator(sel).first
+                                if cand.is_visible(timeout=2000):
+                                    id_input = cand; break
+                            except: continue
+
+                        # 2차 폴백: password가 아닌 첫번째 보이는 text류 input
+                        if not id_input:
+                            all_inputs = page.locator('input').all()
+                            for inp in all_inputs:
+                                try:
+                                    itype = (inp.get_attribute('type') or 'text').lower()
+                                    if itype not in ('password','hidden','checkbox','radio','submit','button') and inp.is_visible(timeout=1000):
+                                        id_input = inp; break
+                                except: continue
+
+                        if not id_input:
+                            raise Exception('아이디 입력란을 찾을 수 없음')
+
                         id_input.fill(stg_id)
-                        page.locator('input[type="password"]').first.fill(stg_pw)
-                        page.locator('button[type="submit"]').first.click()
+
+                        pw_input = page.locator('input[type="password"]').first
+                        pw_input.fill(stg_pw)
+
+                        # 로그인 버튼: submit 우선, 없으면 텍스트로 폴백
+                        clicked = False
+                        for sel in ['button[type="submit"]', 'button:has-text("로그인")', 'button:has-text("Login")', 'input[type="submit"]']:
+                            try:
+                                btn = page.locator(sel).first
+                                if btn.is_visible(timeout=1500):
+                                    btn.click(); clicked = True; break
+                            except: continue
+                        if not clicked:
+                            pw_input.press('Enter')
+
                         page.wait_for_load_state('networkidle', timeout=15000)
                         page.wait_for_timeout(1500)
                     except Exception as e:
