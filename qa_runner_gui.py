@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '2.1'
+APP_VERSION = '2.2'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -669,16 +669,38 @@ class QAWorkerApp:
                 except: stg_extra = {}
 
                 if login_type == 'idpw' and stg_id:
-                    # ① ID/PW 로그인
+                    # ① ID/PW 로그인 - 로그인 경로 자동 탐색
                     self.log_msg(f'🔐 ID/PW 로그인 중...', 'info')
-                    page.goto(f'{stg_base}/login', timeout=20000)
-                    page.wait_for_load_state('networkidle', timeout=15000)
-                    page.fill('input[type="text"]', stg_id)
-                    page.fill('input[type="password"]', stg_pw)
-                    page.click('button[type="submit"]')
-                    page.wait_for_load_state('networkidle', timeout=15000)
-                    page.wait_for_timeout(1500)
-                    if '/login' in page.url:
+                    login_url = None
+                    for login_path in ['/login', '/sign-in']:
+                        try:
+                            page.goto(f'{stg_base}{login_path}', timeout=15000)
+                            page.wait_for_load_state('networkidle', timeout=10000)
+                            # 로그인 폼 요소가 있는지 확인
+                            if page.locator('input[type="text"], input[type="email"]').first.is_visible(timeout=3000):
+                                login_url = login_path
+                                self.log_msg(f'  📍 로그인 경로: {login_path}', 'info')
+                                break
+                        except: continue
+
+                    if not login_url:
+                        # 폴백: 홈으로 이동했을 때 자동 리다이렉트되는 경우
+                        page.goto(stg_base, timeout=20000)
+                        page.wait_for_load_state('networkidle', timeout=15000)
+                        login_url = '/'
+
+                    try:
+                        id_input = page.locator('input[type="text"], input[type="email"]').first
+                        id_input.fill(stg_id)
+                        page.locator('input[type="password"]').first.fill(stg_pw)
+                        page.locator('button[type="submit"]').first.click()
+                        page.wait_for_load_state('networkidle', timeout=15000)
+                        page.wait_for_timeout(1500)
+                    except Exception as e:
+                        self.log_msg(f'❌ 로그인 폼 처리 실패: {e}', 'fail')
+                        browser.close(); self._done(); return
+
+                    if '/login' in page.url or '/sign-in' in page.url:
                         self.log_msg('❌ 로그인 실패 - ID/PW 확인하세요', 'fail')
                         browser.close(); self._done(); return
                     self.log_msg('✅ 로그인 성공', 'pass')
