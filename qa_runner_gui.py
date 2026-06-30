@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '2.4'
+APP_VERSION = '2.5'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -891,15 +891,23 @@ JSON: {{"actions":[
 ]}}
 액션없으면: {{"actions":[]}}"""
 
-                        try:
-                            r = client.chat.completions.create(
-                                model='gpt-4o-mini',
-                                messages=[{'role':'user','content':prompt_action}],
-                                max_tokens=600, temperature=0)
-                            raw = re.sub(r'```json|```','',r.choices[0].message.content.strip()).strip()
-                            actions = json.loads(raw).get('actions',[])
-                            self.log_msg(f'  📋 액션 {len(actions)}건')
-                        except: actions = []
+                        actions = []
+                        for attempt in range(3):
+                            try:
+                                r = client.chat.completions.create(
+                                    model='gpt-4o-mini',
+                                    messages=[{'role':'user','content':prompt_action}],
+                                    max_tokens=600, temperature=0, timeout=40)
+                                raw = re.sub(r'```json|```','',r.choices[0].message.content.strip()).strip()
+                                actions = json.loads(raw).get('actions',[])
+                                self.log_msg(f'  📋 액션 {len(actions)}건')
+                                break
+                            except Exception as api_err:
+                                if attempt < 2:
+                                    self.log_msg(f'  ⚠ 액션생성 재시도 ({attempt+1}/3)', 'warn')
+                                    page.wait_for_timeout(1500)
+                                else:
+                                    self.log_msg(f'  ⚠ 액션 생성 실패: {str(api_err)[:80]}', 'warn')
 
                         # ── 액션 실행 ──
                         for action in actions:
@@ -1004,10 +1012,20 @@ JSON: {{"actions":[
                             ]
                         content_msgs.append({'type':'text','text':'JSON으로만: {"judgment":"PASS","reason":"근거"} 또는 {"judgment":"FAIL","reason":"근거"}'})
 
-                        r2 = client.chat.completions.create(
-                            model='gpt-4o',
-                            messages=[{'role':'user','content':content_msgs}],
-                            max_tokens=400, temperature=0)
+                        r2 = None
+                        for attempt in range(3):
+                            try:
+                                r2 = client.chat.completions.create(
+                                    model='gpt-4o',
+                                    messages=[{'role':'user','content':content_msgs}],
+                                    max_tokens=400, temperature=0, timeout=60)
+                                break
+                            except Exception as api_err:
+                                if attempt < 2:
+                                    self.log_msg(f'  ⚠ GPT 호출 재시도 ({attempt+1}/3): {str(api_err)[:80]}', 'warn')
+                                    page.wait_for_timeout(2000)
+                                else:
+                                    raise
                         raw2 = re.sub(r'```json|```','',r2.choices[0].message.content.strip()).strip()
                         parsed = json.loads(raw2)
                         judgment = parsed.get('judgment','FAIL')
