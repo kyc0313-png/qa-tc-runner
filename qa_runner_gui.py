@@ -10,9 +10,8 @@ from tkinter import ttk, messagebox, scrolledtext
 from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
-# qa_runner_gui.py 수정
-EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '1.5'
+EC2_API = 'http://54.180.98.47'
+APP_VERSION = '1.4'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def check_and_update():
@@ -80,15 +79,67 @@ def clean_text(text):
     s = str(text).replace('\n',' ').replace('\r',' ').replace('\t',' ').replace('ㄴ',' ')
     return re.sub(r'\s+',' ',s).strip()
 
-def navigate_by_menu(page, stg_base, depth_path):
+def get_visible_menu_texts(page):
+    """현재 화면에서 실제 클릭 가능한 메뉴 텍스트 목록을 수집"""
+    texts = []
+    selectors = [
+        'nav a', 'nav li', 'nav span', 'nav button',
+        'aside a', 'aside li', 'aside span', 'aside button',
+        '[class*="sidebar"] a', '[class*="sidebar"] li',
+        '[class*="gnb"] a', '[class*="gnb"] li',
+        '[class*="menu"] a', '[class*="menu"] li',
+    ]
+    seen = set()
+    for sel in selectors:
+        try:
+            els = page.locator(sel).all()
+            for el in els[:80]:
+                try:
+                    if not el.is_visible(timeout=300): continue
+                    t = el.inner_text(timeout=300).strip()
+                    t = re.sub(r'\s+',' ', t)
+                    if t and 1 <= len(t) <= 20 and t not in seen:
+                        seen.add(t)
+                        texts.append((t, el))
+                except: continue
+        except: continue
+    return texts
+
+def find_best_menu_match(target_text, menu_texts):
+    """TC 기능경로 텍스트와 실제 메뉴 텍스트 중 가장 잘 맞는 것 찾기"""
+    target_clean = re.sub(r'\s*\([^)]*\)','', target_text).strip()
+    target_clean = re.sub(r'^GNB_','', target_clean).strip()
+    target_clean = re.sub(r'^[0-9]+[.\-]\s*','', target_clean).strip()
+    if not target_clean: return None
+
+    # 1) 완전 일치
+    for t, el in menu_texts:
+        if t == target_clean:
+            return (t, el)
+    # 2) 메뉴텍스트가 타겟에 포함되거나 그 반대
+    for t, el in menu_texts:
+        if t in target_clean or target_clean in t:
+            return (t, el)
+    # 3) 토큰 겹침 (가장 긴 메뉴명 우선)
+    target_tokens = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', target_clean))
+    best = None; best_overlap = 0
+    for t, el in menu_texts:
+        menu_tokens = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', t))
+        overlap = len(target_tokens & menu_tokens)
+        if overlap > best_overlap:
+            best_overlap = overlap; best = (t, el)
+    if best_overlap > 0:
+        return best
+    return None
+
+def navigate_by_menu(page, stg_base, depth_path, log_fn=None):
     """
-    기능 경로를 분석해서 메뉴를 순서대로 클릭하며 이동
-    URL 맵 없이 사이드바/GNB에서 텍스트로 메뉴 탐색
+    실제 화면의 클릭 가능한 메뉴와 TC 기능경로를 매칭해서 순서대로 클릭.
+    설명성 텍스트(서비스명/화면명)는 실제 메뉴에 없으면 자동 스킵.
     """
     if not depth_path:
         return []
 
-    # > 로 분리 후 액션 파트 제외
     parts = [p.strip() for p in depth_path.split('>') if p.strip()]
     nav_parts = []
     for p in parts:
@@ -102,68 +153,36 @@ def navigate_by_menu(page, stg_base, depth_path):
     done = []
     prev_url = page.url
 
-    for menu_text in nav_parts:
-        # 불필요한 접두사 제거
-        menu_text = re.sub(r'^GNB_', '', menu_text).strip()
-        menu_text = re.sub(r'^[0-9]+[.\-]\s*', '', menu_text).strip()
-        # 괄호 안 내용 제거 (예: "병원관리자 (병원계약관리)" → "병원관리자")
-        menu_clean = re.sub(r'\s*\([^)]*\)', '', menu_text).strip()
-        if not menu_clean: continue
+    for raw_text in nav_parts:
+        try: page.wait_for_load_state('networkidle', timeout=4000)
+        except: pass
+        page.wait_for_timeout(400)  # 약간의 딜레이로 렌더링 안정화
 
-        clicked = False
+        # 현재 화면의 실제 메뉴 텍스트 수집
+        menu_texts = get_visible_menu_texts(page)
+        match = find_best_menu_match(raw_text, menu_texts)
 
-        # 1차: 사이드바/nav에서 정확한 텍스트로 찾기
-        for sel in [
-            f'nav >> text="{menu_clean}"',
-            f'aside >> text="{menu_clean}"',
-            f'[class*="sidebar"] >> text="{menu_clean}"',
-            f'[class*="gnb"] >> text="{menu_clean}"',
-            f'[class*="menu"] >> text="{menu_clean}"',
-        ]:
-            try:
-                el = page.locator(sel).first
-                if el.is_visible(timeout=2000):
-                    el.scroll_into_view_if_needed()
-                    el.click()
-                    page.wait_for_timeout(1500)
-                    try: page.wait_for_load_state('networkidle', timeout=5000)
-                    except: pass
-                    if page.url != prev_url:
-                        prev_url = page.url
-                        done.append(f'{menu_clean}')
-                        clicked = True
-                        break
-                    else:
-                        done.append(f'{menu_clean}(클릭)')
-                        clicked = True
-                        break
-            except: continue
+        if not match:
+            done.append(f'{raw_text}(메뉴없음-스킵)')
+            if log_fn: log_fn(f'    ⏭ 실제 메뉴에 없음: "{raw_text}" → 스킵')
+            continue
 
-        # 2차: has-text 셀렉터로 폴백
-        if not clicked:
-            for sel in [
-                f'a:has-text("{menu_clean}")',
-                f'li:has-text("{menu_clean}")',
-                f'button:has-text("{menu_clean}")',
-                f'span:has-text("{menu_clean}")',
-            ]:
-                try:
-                    els = page.locator(sel).all()
-                    for el in els[:3]:
-                        if el.is_visible(timeout=1000):
-                            el.scroll_into_view_if_needed()
-                            el.click()
-                            page.wait_for_timeout(1500)
-                            try: page.wait_for_load_state('networkidle', timeout=5000)
-                            except: pass
-                            done.append(f'{menu_clean}(폴백)')
-                            clicked = True
-                            break
-                    if clicked: break
-                except: continue
-
-        if not clicked:
-            done.append(f'{menu_clean}(실패)')
+        matched_text, el = match
+        try:
+            el.scroll_into_view_if_needed()
+            el.click()
+            page.wait_for_timeout(1200)
+            try: page.wait_for_load_state('networkidle', timeout=5000)
+            except: pass
+            if page.url != prev_url:
+                prev_url = page.url
+                done.append(matched_text)
+            else:
+                done.append(f'{matched_text}(클릭)')
+            if log_fn: log_fn(f'    ✓ 메뉴 매칭: "{raw_text}" → "{matched_text}" 클릭')
+        except Exception as e:
+            done.append(f'{matched_text}(클릭실패)')
+            if log_fn: log_fn(f'    ✗ 클릭 실패: "{matched_text}"')
 
     return done
 
@@ -651,7 +670,7 @@ class QAWorkerApp:
                         page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
 
                         # 기능 경로로 메뉴 탐색
-                        nav_done = navigate_by_menu(page, stg_base, depth)
+                        nav_done = navigate_by_menu(page, stg_base, depth, log_fn=lambda m: self.log_msg(m))
                         if nav_done:
                             self.log_msg(f'  🧭 메뉴: {" > ".join(nav_done)}')
                         self.log_msg(f'  🌐 이동: {page.url}')
