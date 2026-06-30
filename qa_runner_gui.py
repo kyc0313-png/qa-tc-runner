@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '1.9'
+APP_VERSION = '2.0'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -273,8 +273,16 @@ class QAWorkerApp:
         left = tk.Frame(self.root, bg=BG)
         left.pack(fill='both', expand=True)
 
-        tk.Label(left, text='🤖 QA TC Runner', font=('맑은 고딕',15,'bold'),
-                 bg=BG, fg='#1a1a1a').pack(pady=(12,2))
+        title_row = tk.Frame(left, bg=BG)
+        title_row.pack(pady=(12,2))
+        tk.Label(title_row, text='🤖 QA TC Runner', font=('맑은 고딕',15,'bold'),
+                 bg=BG, fg='#1a1a1a').pack(side='left')
+        tk.Label(title_row, text=f' v{APP_VERSION}', font=('맑은 고딕',10),
+                 bg=BG, fg='#aaa').pack(side='left', padx=(2,0))
+        self.update_btn = tk.Button(title_row, text='🔄 업데이트 확인', font=('맑은 고딕',9),
+            bg='#E3F2FD', fg='#1565C0', bd=0, padx=8, pady=2, cursor='hand2',
+            command=self.manual_check_update)
+        self.update_btn.pack(side='left', padx=(10,0))
         tk.Label(left, text='사무실 PC 자동 검증', font=('맑은 고딕',10),
                  bg=BG, fg='#888').pack(pady=(0,8))
 
@@ -438,6 +446,20 @@ class QAWorkerApp:
         self.log.insert('end', msg+'\n', tag)
         self.log.see('end')
         self.log.configure(state='disabled')
+
+    def manual_check_update(self):
+        self.update_btn.config(state='disabled', text='확인 중...')
+        threading.Thread(target=self._manual_check_update_worker, daemon=True).start()
+
+    def _manual_check_update_worker(self):
+        info = get_latest_release_info()
+        def finish():
+            self.update_btn.config(state='normal', text='🔄 업데이트 확인')
+            if info:
+                prompt_update_ui(self.root, info)
+            else:
+                messagebox.showinfo('업데이트 확인', f'현재 v{APP_VERSION}은 최신 버전입니다.')
+        self.root.after(0, finish)
 
     def update_viewer(self, tc_info, judgment, reason, before_b64, after_b64):
         """결과는 웹 대시보드에서 확인"""
