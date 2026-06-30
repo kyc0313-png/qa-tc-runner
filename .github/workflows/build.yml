@@ -54,13 +54,6 @@ jobs:
           --add-data "$ms_playwright;ms-playwright" `
           qa_runner_gui.py
 
-    - name: EXE 업로드 (Artifact)
-      uses: actions/upload-artifact@v4
-      with:
-        name: QA_TC_Runner_Windows
-        path: dist/QA_TC_Runner.exe
-        retention-days: 30
-
     - name: GitHub Release 생성 및 EXE 업로드
       uses: ncipollo/release-action@v1
       with:
