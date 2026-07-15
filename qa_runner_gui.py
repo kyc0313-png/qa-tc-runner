@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '2.5'
+APP_VERSION = '3.0'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -631,6 +631,8 @@ class QAWorkerApp:
             stg_url_raw = stg_url_raw.replace('http://http://', 'http://')
             if stg_url_raw and not stg_url_raw.startswith('http'):
                 stg_url_raw = 'https://' + stg_url_raw
+            # 쿼리스트링 자동 제거
+            stg_url_raw = stg_url_raw.split('?')[0]
             stg_base = stg_url_raw.rstrip('/')
             stg_login = cfg.get('stg_login_required', True)
             stg_id = cfg.get('stg_account','')
@@ -895,7 +897,7 @@ JSON: {{"actions":[
                         for attempt in range(3):
                             try:
                                 r = client.chat.completions.create(
-                                    model='gpt-4o-mini',
+                                    model='gpt-5.6-luna',
                                     messages=[{'role':'user','content':prompt_action}],
                                     max_tokens=600, temperature=0, timeout=40)
                                 raw = re.sub(r'```json|```','',r.choices[0].message.content.strip()).strip()
@@ -1016,7 +1018,7 @@ JSON: {{"actions":[
                         for attempt in range(3):
                             try:
                                 r2 = client.chat.completions.create(
-                                    model='gpt-4o',
+                                    model='gpt-5.6-terra',
                                     messages=[{'role':'user','content':content_msgs}],
                                     max_tokens=400, temperature=0, timeout=60)
                                 break
