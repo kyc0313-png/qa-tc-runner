@@ -11,7 +11,7 @@ from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.0'
+APP_VERSION = '3.1'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -899,7 +899,7 @@ JSON: {{"actions":[
                                 r = client.chat.completions.create(
                                     model='gpt-5.6-luna',
                                     messages=[{'role':'user','content':prompt_action}],
-                                    max_tokens=600, temperature=0, timeout=40)
+                                    max_completion_tokens=600, temperature=0, timeout=40)
                                 raw = re.sub(r'```json|```','',r.choices[0].message.content.strip()).strip()
                                 actions = json.loads(raw).get('actions',[])
                                 self.log_msg(f'  📋 액션 {len(actions)}건')
@@ -1020,7 +1020,7 @@ JSON: {{"actions":[
                                 r2 = client.chat.completions.create(
                                     model='gpt-5.6-terra',
                                     messages=[{'role':'user','content':content_msgs}],
-                                    max_tokens=400, temperature=0, timeout=60)
+                                    max_completion_tokens=400, temperature=0, timeout=60)
                                 break
                             except Exception as api_err:
                                 if attempt < 2:
