@@ -6,12 +6,13 @@ QA TC Runner - 검증 결과 뷰어
 - 모든 액션 타입 전후 캡처
 """
 import tkinter as tk
+import httpx
 from tkinter import ttk, messagebox, scrolledtext
 from PIL import Image, ImageTk
 import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.2'
+APP_VERSION = '3.3'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -641,7 +642,7 @@ class QAWorkerApp:
             self.log_msg(f'🌐 STG: {stg_base}', 'info')
 
             priority = self.priority_var.get()
-            client = openai.OpenAI(api_key=api_key)
+            client = openai.OpenAI(api_key=api_key, http_client=httpx.Client(verify=False))
 
             # 선택된 TC
             selected_indices = list(self.tc_listbox.curselection())
