@@ -1,23 +1,30 @@
 name: Build Windows EXE
+
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: windows-latest
+
     steps:
     - uses: actions/checkout@v4
+
     - name: Python 설치
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
+
     - name: 패키지 설치
       run: |
-        pip install pyinstaller playwright openai requests Pillow
+        pip install pyinstaller playwright openai requests Pillow httpx certifi
+
     - name: Playwright 브라우저 설치
       run: |
         playwright install chromium --with-deps
+
     - name: 버전 추출
       id: version
       shell: python
@@ -30,9 +37,11 @@ jobs:
         with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
             f.write(f'version={version}\n')
         print(f'Version: {version}')
+
     - name: EXE 빌드 (Chromium 포함)
       run: |
         $ms_playwright = "$env:USERPROFILE\AppData\Local\ms-playwright"
+        $certifi_path = python -c "import certifi; print(certifi.where())"
         pyinstaller --onefile --windowed --name "QA_TC_Runner" `
           --hidden-import playwright `
           --hidden-import playwright.sync_api `
@@ -42,9 +51,14 @@ jobs:
           --hidden-import PIL `
           --hidden-import PIL.Image `
           --hidden-import PIL.ImageTk `
+          --hidden-import httpx `
+          --hidden-import certifi `
           --collect-all playwright `
+          --collect-all certifi `
           --add-data "$ms_playwright;ms-playwright" `
+          --add-data "$certifi_path;certifi" `
           qa_runner_gui.py
+
     - name: GitHub Release 생성 및 EXE 업로드
       uses: ncipollo/release-action@v1
       with:
@@ -52,6 +66,7 @@ jobs:
         name: QA TC Runner v${{ steps.version.outputs.version }}
         body: |
           ## QA TC Runner v${{ steps.version.outputs.version }}
+
           ### How to install
           1. Download QA_TC_Runner.exe
           2. Run (if Windows Defender warning, click "More info -> Run anyway")
