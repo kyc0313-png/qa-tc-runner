@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.6'
+APP_VERSION = '3.7'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -219,6 +219,9 @@ def navigate_by_menu(page, stg_base, depth_path, log_fn=None, sheet_name=None):
         clean = re.sub(r'^[0-9]+[.\-]\s*', '', clean).strip()
         # 끝에 붙은 동작어(버튼/클릭/선택/확인/노출 등)는 메뉴명이 아니므로 제거
         clean = re.sub(r'(버튼|카테고리|클릭|선택|입력|확인|노출|화면|이동)+\s*$', '', clean).strip()
+        # 키보드 동작어 포함 파트는 메뉴가 아님
+        if re.search(r'enter|esc|tab|키\s*입력|키보드', part_text.lower()):
+            return []  # 메뉴 탐색 대상 아님
         if clean and 1 <= len(clean) <= 20 and clean not in cands:
             cands.append(clean)
         return cands
@@ -893,7 +896,8 @@ class QAWorkerApp:
 3. 드래그가 필요하면 type:drag 사용
 4. 입력이 필요하면 type:fill 사용
 5. 검색 후 조회/Enter 버튼이 없으면 type:wait(1500)으로 자동검색 대기
-6. Enter 키가 필요하면 type:press, key:Enter 사용
+6. Enter 키가 필요하면 반드시 type:press, key:Enter 사용
+7. 기능경로에 "enter 키" 또는 "엔터" 언급이 있으면 반드시 press Enter 액션 추가
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
