@@ -6,21 +6,20 @@ QA TC Runner - 검증 결과 뷰어
 - 모든 액션 타입 전후 캡처
 """
 import tkinter as tk
+import threading, os, sys, json, base64, re, requests, tempfile, io
 import httpx
 import certifi
 import ssl
-import os
+from tkinter import ttk, messagebox, scrolledtext
+from PIL import Image, ImageTk
 
 # PyInstaller exe에서 SSL 인증서 경로 설정
 if getattr(sys, 'frozen', False):
     os.environ['SSL_CERT_FILE'] = certifi.where()
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
-from tkinter import ttk, messagebox, scrolledtext
-from PIL import Image, ImageTk
-import threading, os, sys, json, base64, re, requests, tempfile, io
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.4'
+APP_VERSION = '3.5'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
