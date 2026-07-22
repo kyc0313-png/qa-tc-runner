@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.2'
+APP_VERSION = '4.3'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -927,6 +927,33 @@ JSON: {{"actions":[
                                     page.wait_for_timeout(1500)
                                 else:
                                     self.log_msg(f'  ⚠ 액션 생성 실패: {str(api_err)[:80]}', 'warn')
+
+                        # ── 기능경로에 검색어 입력이 있으면 직접 처리 ──
+                        search_value = None
+                        if any(k in depth for k in ['입력', '검색어']):
+                            matches = re.findall(r'[\u201c\u201d"\'](\w+)[\u201c\u201d"\']'  , depth)
+                            if matches:
+                                search_value = matches[-1]
+
+                        if search_value:
+                            try:
+                                for search_sel in [
+                                    'input[placeholder*="환자명"]',
+                                    'input[placeholder*="검색"]',
+                                    'input[placeholder*="이름"]',
+                                    'input[type="search"]',
+                                ]:
+                                    try:
+                                        inp = page.locator(search_sel).first
+                                        if inp.is_visible(timeout=1000):
+                                            inp.click()
+                                            page.wait_for_timeout(300)
+                                            inp.fill(search_value)
+                                            page.wait_for_timeout(500)
+                                            self.log_msg(f'  🔍 검색어 직접 입력: "{search_value}"', 'info')
+                                            break
+                                    except: continue
+                            except: pass
 
                         # ── 액션 실행 ──
                         for action in actions:
