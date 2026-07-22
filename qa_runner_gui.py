@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.5'
+APP_VERSION = '4.6'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -928,15 +928,27 @@ JSON: {{"actions":[
                                 else:
                                     self.log_msg(f'  ⚠ 액션 생성 실패: {str(api_err)[:80]}', 'warn')
 
-                        # ── 기능경로에 검색어 입력이 있으면 직접 처리 ──
+                        # ── 기능경로에 검색 입력필드 관련 내용이 있으면 직접 처리 ──
                         search_value = None
-                        if any(k in depth for k in ['입력', '검색어']):
-                            matches = re.findall(r'[\u201c\u201d"\'](\w+)[\u201c\u201d"\']'  , depth)
+                        search_field_click_only = False  # 클릭만 하는 TC 여부
+
+                        # 검색 입력필드 관련 키워드 체크
+                        depth_lower = depth.lower()
+                        has_search_field = any(k in depth for k in ['검색어 입력필드', '검색 입력필드', '검색필드', '입력필드'])
+
+                        if has_search_field:
+                            # 입력값이 있는지 확인 (따옴표 안의 값)
+                            matches = re.findall(r'[\u201c\u201d"\'](\w+)[\u201c\u201d"\']', depth)
                             if matches:
                                 search_value = matches[-1]
+                            else:
+                                # 입력값 없이 클릭만 하는 TC
+                                search_field_click_only = True
 
                         search_done = False
-                        if search_value:
+
+                        # 검색 입력필드를 직접 찾아서 처리
+                        if has_search_field:
                             try:
                                 for search_sel in [
                                     'input[placeholder*="환자명"]',
@@ -948,10 +960,13 @@ JSON: {{"actions":[
                                         inp = page.locator(search_sel).first
                                         if inp.is_visible(timeout=1000):
                                             inp.click()
-                                            page.wait_for_timeout(300)
-                                            inp.fill(search_value)
                                             page.wait_for_timeout(500)
-                                            self.log_msg(f'  🔍 검색어 직접 입력: "{search_value}"', 'info')
+                                            if search_value:
+                                                inp.fill(search_value)
+                                                page.wait_for_timeout(500)
+                                                self.log_msg(f'  🔍 검색어 직접 입력: "{search_value}"', 'info')
+                                            else:
+                                                self.log_msg(f'  🖱 검색 입력필드 직접 클릭', 'info')
                                             search_done = True
                                             break
                                     except: continue
