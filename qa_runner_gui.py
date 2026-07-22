@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.1'
+APP_VERSION = '4.2'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -898,8 +898,9 @@ class QAWorkerApp:
 5. 검색 후 조회/Enter 버튼이 없으면 type:wait(1500)으로 자동검색 대기
 6. Enter 키가 필요하면 반드시 type:press, key:Enter 사용
 7. 기능경로에 "enter 키" 또는 "엔터" 언급이 있으면 반드시 press Enter 액션 추가
-8. 검색 입력필드는 input[placeholder*="검색"], input[type="search"], input[placeholder*="환자"] 우선 사용
-9. "등록" "추가" "삭제" 등 데이터 변경 버튼은 절대 클릭하지 말 것
+8. 검색 입력필드는 반드시 input[placeholder*="검색"], input[placeholder*="환자"], input[placeholder*="이름"], input[type="search"] 순으로 시도
+9. "등록" "추가" 버튼은 절대 클릭하지 말 것 - 검색 입력 후 Enter만 누를 것
+10. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
@@ -977,7 +978,24 @@ JSON: {{"actions":[
                             elif atype == 'fill':
                                 val = str(action.get('value','테스트'))
                                 try:
-                                    el = page.locator(sel).first
+                                    # 검색 입력필드면 placeholder 기반으로 정확히 찾기
+                                    if any(k in desc for k in ['검색', '입력필드', '환자명', 'placeholder']):
+                                        for search_sel in [
+                                            'input[placeholder*="환자명"]',
+                                            'input[placeholder*="검색"]',
+                                            'input[placeholder*="이름"]',
+                                            'input[type="search"]',
+                                        ]:
+                                            try:
+                                                candidate = page.locator(search_sel).first
+                                                if candidate.is_visible(timeout=1000):
+                                                    el = candidate
+                                                    break
+                                            except: continue
+                                        else:
+                                            el = page.locator(sel).first
+                                    else:
+                                        el = page.locator(sel).first
                                     if el.is_visible(timeout=3000):
                                         el.fill(val); page.wait_for_timeout(500)
                                         self.log_msg(f'  ✓ 입력: {desc}')
