@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.3'
+APP_VERSION = '4.5'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -935,6 +935,7 @@ JSON: {{"actions":[
                             if matches:
                                 search_value = matches[-1]
 
+                        search_done = False
                         if search_value:
                             try:
                                 for search_sel in [
@@ -951,15 +952,21 @@ JSON: {{"actions":[
                                             inp.fill(search_value)
                                             page.wait_for_timeout(500)
                                             self.log_msg(f'  🔍 검색어 직접 입력: "{search_value}"', 'info')
+                                            search_done = True
                                             break
                                     except: continue
                             except: pass
 
                         # ── 액션 실행 ──
+                        # 검색어 직접 입력 완료된 경우 fill/click 액션은 Enter만 실행
                         for action in actions:
                             if not self.running: break
                             atype = action.get('type','')
                             desc = action.get('description', atype)
+                            # 검색어 직접 입력 완료 후 fill/click 액션은 스킵 (Enter만 실행)
+                            if search_done and atype in ('fill', 'click') and atype != 'press':
+                                self.log_msg(f'  ⏭ 스킵 (검색어 직접 입력 완료): {desc}', 'info')
+                                continue
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
                             # 로그아웃/탈퇴 등 위험 액션 차단
@@ -1052,9 +1059,25 @@ JSON: {{"actions":[
                         # 기능경로에 enter/엔터 언급 시 자동 Enter 실행
                         if 'enter' in depth.lower() or '엔터' in depth.lower():
                             try:
+                                # Enter 전에 검색 입력필드에 포커스 확보
+                                focused = False
+                                for search_sel in [
+                                    'input[placeholder*="환자명"]',
+                                    'input[placeholder*="검색"]',
+                                    'input[placeholder*="이름"]',
+                                    'input[type="search"]',
+                                ]:
+                                    try:
+                                        inp = page.locator(search_sel).first
+                                        if inp.is_visible(timeout=500):
+                                            inp.click()
+                                            page.wait_for_timeout(200)
+                                            focused = True
+                                            break
+                                    except: continue
                                 page.keyboard.press('Enter')
                                 page.wait_for_timeout(2000)
-                                self.log_msg(f'  ⌨ Enter 키 자동 실행', 'info')
+                                self.log_msg(f'  ⌨ Enter 키 자동 실행 (포커스: {"검색필드" if focused else "현재위치"})', 'info')
                             except: pass
 
                         # 예상치 못한 팝업/모달 감지 → 자동 닫기 시도
