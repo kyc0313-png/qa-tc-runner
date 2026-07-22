@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.7'
+APP_VERSION = '3.8'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -1000,6 +1000,14 @@ JSON: {{"actions":[
                                 page.wait_for_timeout(ms)
 
                             try: page.wait_for_load_state('networkidle', timeout=3000)
+                            except: pass
+
+                        # 기능경로에 enter/엔터 언급 시 자동 Enter 실행
+                        if 'enter' in depth.lower() or '엔터' in depth.lower():
+                            try:
+                                page.keyboard.press('Enter')
+                                page.wait_for_timeout(2000)
+                                self.log_msg(f'  ⌨ Enter 키 자동 실행', 'info')
                             except: pass
 
                         # ── 액션 후 스크린샷 ──
