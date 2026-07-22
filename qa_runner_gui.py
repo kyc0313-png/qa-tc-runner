@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '3.8'
+APP_VERSION = '4.0'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -898,6 +898,8 @@ class QAWorkerApp:
 5. 검색 후 조회/Enter 버튼이 없으면 type:wait(1500)으로 자동검색 대기
 6. Enter 키가 필요하면 반드시 type:press, key:Enter 사용
 7. 기능경로에 "enter 키" 또는 "엔터" 언급이 있으면 반드시 press Enter 액션 추가
+8. 검색 입력필드는 input[placeholder*="검색"], input[type="search"], input[placeholder*="환자"] 우선 사용
+9. "등록" "추가" "삭제" 등 데이터 변경 버튼은 절대 클릭하지 말 것
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
@@ -933,7 +935,7 @@ JSON: {{"actions":[
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
                             # 로그아웃/탈퇴 등 위험 액션 차단
-                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제']
+                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제','환자등록','환자 등록','patient.*regist','등록 버튼','추가 버튼']
                             if any(w in desc.lower() or w in sel.lower() for w in danger_words):
                                 self.log_msg(f'  ⚠ 위험 액션 차단: {desc}', 'warn'); continue
 
@@ -1009,6 +1011,52 @@ JSON: {{"actions":[
                                 page.wait_for_timeout(2000)
                                 self.log_msg(f'  ⌨ Enter 키 자동 실행', 'info')
                             except: pass
+
+                        # 예상치 못한 팝업/모달 감지 → 자동 닫기 시도
+                        try:
+                            modal_sel = 'div[role="dialog"], .modal, [class*="modal"], [class*="popup"], [class*="overlay"]'
+                            modal = page.locator(modal_sel).first
+                            if modal.is_visible(timeout=1000):
+                                self.log_msg(f'  🔒 팝업 감지 → 닫기 시도', 'warn')
+                                closed = False
+                                # 1차: X 버튼 클릭 시도
+                                for close_sel in [
+                                    'button[aria-label="close"]',
+                                    'button[aria-label="닫기"]',
+                                    'button[aria-label="Close"]',
+                                    'button:has-text("×")',
+                                    'button:has-text("✕")',
+                                    'button:has-text("✗")',
+                                    'button:has-text("닫기")',
+                                    'button:has-text("취소")',
+                                    'button:has-text("Cancel")',
+                                    'button:has-text("Close")',
+                                    '[class*="close-btn"]',
+                                    '[class*="closeBtn"]',
+                                    '[class*="modal-close"]',
+                                    '[class*="close"]',
+                                    'div[role="dialog"] button[class*="close"]',
+                                    'div[role="dialog"] svg',
+                                    '[class*="modal"] button:last-child',
+                                    'div[role="dialog"] button:first-child',
+                                ]:
+                                    try:
+                                        btn = page.locator(close_sel).first
+                                        if btn.is_visible(timeout=500):
+                                            btn.click()
+                                            page.wait_for_timeout(800)
+                                            closed = True
+                                            self.log_msg(f'  ✓ 팝업 닫기 성공 (X 버튼)', 'info')
+                                            break
+                                    except: continue
+                                # 2차: ESC 키 시도
+                                if not closed:
+                                    page.keyboard.press('Escape')
+                                    page.wait_for_timeout(800)
+                                    self.log_msg(f'  ✓ 팝업 닫기 시도 (ESC)', 'info')
+                                # 팝업 닫힌 후 페이지 상태 확인
+                                page.wait_for_timeout(500)
+                        except: pass
 
                         # ── 액션 후 스크린샷 ──
                         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as f:
