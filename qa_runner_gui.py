@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.6'
+APP_VERSION = '4.8'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -899,8 +899,9 @@ class QAWorkerApp:
 6. Enter 키가 필요하면 반드시 type:press, key:Enter 사용
 7. 기능경로에 "enter 키" 또는 "엔터" 언급이 있으면 반드시 press Enter 액션 추가
 8. 검색 입력필드는 반드시 input[placeholder*="검색"], input[placeholder*="환자"], input[placeholder*="이름"], input[type="search"] 순으로 시도
-9. "등록" "추가" 버튼은 절대 클릭하지 말 것 - 검색 입력 후 Enter만 누를 것
-10. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
+9. 기능경로 끝이 "확인" "노출 확인" "확인하기"이면 클릭 없이 wait(500) 액션만 생성
+10. [버튼명] 버튼 클릭이 기능경로에 명시된 경우에만 해당 버튼 클릭 - 그 외 "등록" "추가" 버튼 클릭 절대 금지
+11. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
@@ -1096,10 +1097,13 @@ JSON: {{"actions":[
                             except: pass
 
                         # 예상치 못한 팝업/모달 감지 → 자동 닫기 시도
+                        # 단, 기능경로에 팝업/등록 관련 내용이 있으면 의도된 것이므로 닫지 않음
+                        popup_keywords = ['팝업', '모달', '등록] 버튼', '등록 버튼', 'popup', 'modal', '레이어']
+                        popup_intended = any(k in depth for k in popup_keywords)
                         try:
                             modal_sel = 'div[role="dialog"], .modal, [class*="modal"], [class*="popup"], [class*="overlay"]'
                             modal = page.locator(modal_sel).first
-                            if modal.is_visible(timeout=1000):
+                            if modal.is_visible(timeout=1000) and not popup_intended:
                                 self.log_msg(f'  🔒 팝업 감지 → 닫기 시도', 'warn')
                                 closed = False
                                 # 1차: X 버튼 클릭 시도
