@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.0'
+APP_VERSION = '4.1'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -935,7 +935,7 @@ JSON: {{"actions":[
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
                             # 로그아웃/탈퇴 등 위험 액션 차단
-                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제','환자등록','환자 등록','patient.*regist','등록 버튼','추가 버튼']
+                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제']
                             if any(w in desc.lower() or w in sel.lower() for w in danger_words):
                                 self.log_msg(f'  ⚠ 위험 액션 차단: {desc}', 'warn'); continue
 
@@ -1020,35 +1020,32 @@ JSON: {{"actions":[
                                 self.log_msg(f'  🔒 팝업 감지 → 닫기 시도', 'warn')
                                 closed = False
                                 # 1차: X 버튼 클릭 시도
-                                for close_sel in [
+                                # 모든 닫기 버튼 후보를 한번에 시도
+                                close_sels = [
                                     'button[aria-label="close"]',
                                     'button[aria-label="닫기"]',
                                     'button[aria-label="Close"]',
                                     'button:has-text("×")',
                                     'button:has-text("✕")',
-                                    'button:has-text("✗")',
                                     'button:has-text("닫기")',
                                     'button:has-text("취소")',
-                                    'button:has-text("Cancel")',
-                                    'button:has-text("Close")',
-                                    '[class*="close-btn"]',
-                                    '[class*="closeBtn"]',
-                                    '[class*="modal-close"]',
                                     '[class*="close"]',
-                                    'div[role="dialog"] button[class*="close"]',
-                                    'div[role="dialog"] svg',
-                                    '[class*="modal"] button:last-child',
                                     'div[role="dialog"] button:first-child',
-                                ]:
-                                    try:
-                                        btn = page.locator(close_sel).first
-                                        if btn.is_visible(timeout=500):
-                                            btn.click()
-                                            page.wait_for_timeout(800)
-                                            closed = True
-                                            self.log_msg(f'  ✓ 팝업 닫기 성공 (X 버튼)', 'info')
-                                            break
-                                    except: continue
+                                    '[class*="modal"] button:last-child',
+                                ]
+                                combined_sel = ', '.join(close_sels)
+                                try:
+                                    btns = page.locator(combined_sel).all()
+                                    for btn in btns[:5]:
+                                        try:
+                                            if btn.is_visible(timeout=200):
+                                                btn.click()
+                                                page.wait_for_timeout(500)
+                                                closed = True
+                                                self.log_msg(f'  ✓ 팝업 닫기 성공', 'info')
+                                                break
+                                        except: continue
+                                except: pass
                                 # 2차: ESC 키 시도
                                 if not closed:
                                     page.keyboard.press('Escape')
