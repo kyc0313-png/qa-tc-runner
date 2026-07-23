@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.8'
+APP_VERSION = '4.9'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -178,17 +178,24 @@ def find_best_menu_match(target_text, menu_texts):
     for t, el in menu_texts:
         if t in target_clean or target_clean in t:
             return (t, el)
-    # 3) 토큰 겹침 (가장 긴 메뉴명 우선)
+    # 3) 토큰 겹침 - 한쪽 토큰 집합이 다른 쪽에 완전히 포함될 때만 매칭
+    #    [FIX] 기존에는 토큰 1개만 겹쳐도(overlap>0) 매칭시켜서
+    #    "환자 등록"(토큰: 환자,등록)이 "환자 관리"(토큰: 환자,관리)와
+    #    "환자" 토큰 하나만으로 오매칭되던 문제가 있었음.
+    #    이제는 한쪽 토큰 집합이 다른 쪽에 완전히 포함되는 경우만 인정.
     target_tokens = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', target_clean))
-    best = None; best_overlap = 0
+    if not target_tokens:
+        return None
+    best = None; best_len = 0
     for t, el in menu_texts:
         menu_tokens = set(re.findall(r'[가-힣a-zA-Z0-9]{2,}', t))
-        overlap = len(target_tokens & menu_tokens)
-        if overlap > best_overlap:
-            best_overlap = overlap; best = (t, el)
-    if best_overlap > 0:
-        return best
-    return None
+        if not menu_tokens:
+            continue
+        if target_tokens.issubset(menu_tokens) or menu_tokens.issubset(target_tokens):
+            overlap_len = len(target_tokens & menu_tokens)
+            if overlap_len > best_len:
+                best_len = overlap_len; best = (t, el)
+    return best
 
 def navigate_by_menu(page, stg_base, depth_path, log_fn=None, sheet_name=None):
     """
@@ -974,15 +981,23 @@ JSON: {{"actions":[
                             except: pass
 
                         # ── 액션 실행 ──
-                        # 검색어 직접 입력 완료된 경우 fill/click 액션은 Enter만 실행
+                        # [FIX] 검색어 직접 입력이 완료된 경우에도, "검색 자체와 무관한"
+                        # 버튼 클릭(예: 환자 등록 버튼 클릭)까지 스킵되면 안 됨.
+                        # fill은 항상 스킵(중복 입력 방지)하되, click은 검색 관련 키워드가
+                        # 있는 경우에만 스킵한다.
+                        SEARCH_SKIP_CLICK_KEYWORDS = ['메뉴', '입력필드', '검색어', '검색 필드', '환자 검색', '필드 클릭', '필드클릭']
                         for action in actions:
                             if not self.running: break
                             atype = action.get('type','')
                             desc = action.get('description', atype)
-                            # 검색어 직접 입력 완료 후 fill/click 액션은 스킵 (Enter만 실행)
-                            if search_done and atype in ('fill', 'click') and atype != 'press':
+
+                            if search_done and atype == 'fill':
                                 self.log_msg(f'  ⏭ 스킵 (검색어 직접 입력 완료): {desc}', 'info')
                                 continue
+                            if search_done and atype == 'click' and any(k in desc for k in SEARCH_SKIP_CLICK_KEYWORDS):
+                                self.log_msg(f'  ⏭ 스킵 (검색어 직접 입력 완료): {desc}', 'info')
+                                continue
+
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
                             # 로그아웃/탈퇴 등 위험 액션 차단
@@ -1002,11 +1017,18 @@ JSON: {{"actions":[
                                         actions_done.append(f'클릭: {desc}'); clicked = True
                                 except: pass
                                 if not clicked:
+                                    # [FIX] "환자","등록","관리" 같은 범용 단어는 substring(has-text) 매칭 시
+                                    # 화면 내 전혀 다른 요소("+환자 등록" 버튼 등)를 잘못 클릭할 수 있어
+                                    # 이런 단어들은 exact 텍스트 매칭으로 제한한다.
+                                    GENERIC_FALLBACK_WORDS = {'환자','등록','관리','메뉴','버튼','클릭','선택','확인','입력','검색','노출','화면'}
                                     hints = re.findall(r'[가-힣a-zA-Z0-9]{2,}', desc)
                                     for t in hints[:2]:
                                         for tag in ['button','label','a','span']:
                                             try:
-                                                el2 = page.locator(f'{tag}:has-text("{t}")').first
+                                                if t in GENERIC_FALLBACK_WORDS:
+                                                    el2 = page.locator(tag).get_by_text(t, exact=True).first
+                                                else:
+                                                    el2 = page.locator(f'{tag}:has-text("{t}")').first
                                                 if el2.is_visible(timeout=1500):
                                                     el2.click(); page.wait_for_timeout(800)
                                                     self.log_msg(f'  ✓ 클릭(폴백): {t}')
@@ -1019,7 +1041,7 @@ JSON: {{"actions":[
 
                             elif atype == 'press':
                                 try:
-                                    key = a.get('key', action.get('key', 'Enter'))
+                                    key = action.get('key', 'Enter')
                                     page.keyboard.press(key)
                                     page.wait_for_timeout(1500)
                                     actions_done.append(f'✓ 키입력: {desc} ({key})')
