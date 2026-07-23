@@ -954,6 +954,15 @@ JSON: {{"actions":[
                                 search_field_click_only = True
 
                         search_done = False
+                        # [FIX] Enter 자동 실행은 원래 모든 액션이 끝난 뒤(맨 끝)에서 무조건
+                        # 한 번 더 실행되고 있었음. 그래서 "검색어 입력 → 검색 → [환자 등록]
+                        # 버튼 클릭"처럼 검색 뒤에 별도 버튼 클릭이 있는 TC(TC10/14 등)에서는,
+                        # 버튼 클릭으로 열린 모달 위에서 Enter가 한 번 더 눌려 모달이
+                        # 제출/닫힘 처리되고, 그 직후 찍는 "액션 후 스크린샷"에는 이미 모달이
+                        # 사라진 상태라 FAIL로 오판정되는 문제가 있었음.
+                        # → Enter는 "검색어 입력 직후"에만 실행하고, 이후의 버튼 클릭 액션은
+                        # Enter 없이 그대로 실행되도록 순서를 앞당김.
+                        enter_already_done = False
 
                         # 검색 입력필드를 직접 찾아서 처리
                         if has_search_field:
@@ -978,6 +987,15 @@ JSON: {{"actions":[
                                             search_done = True
                                             break
                                     except: continue
+                            except: pass
+
+                        # [FIX] 검색어 입력 직후 Enter 실행 (버튼 클릭 액션보다 먼저)
+                        if search_done and ('enter' in depth.lower() or '엔터' in depth.lower()):
+                            try:
+                                page.keyboard.press('Enter')
+                                page.wait_for_timeout(2000)
+                                self.log_msg(f'  ⌨ Enter 키 자동 실행 (검색어 입력 직후)', 'info')
+                                enter_already_done = True
                             except: pass
 
                         # ── 액션 실행 ──
@@ -1095,7 +1113,9 @@ JSON: {{"actions":[
                             except: pass
 
                         # 기능경로에 enter/엔터 언급 시 자동 Enter 실행
-                        if 'enter' in depth.lower() or '엔터' in depth.lower():
+                        # [FIX] 검색어 입력 직후에 이미 Enter를 실행했다면(enter_already_done)
+                        # 여기서 다시 누르지 않는다 (버튼 클릭 등 이후 액션에 영향 방지)
+                        if not enter_already_done and ('enter' in depth.lower() or '엔터' in depth.lower()):
                             try:
                                 # Enter 전에 검색 입력필드에 포커스 확보
                                 focused = False
