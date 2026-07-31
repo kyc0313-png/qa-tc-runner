@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.9'
+APP_VERSION = '4.11'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -859,7 +859,15 @@ class QAWorkerApp:
                         page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
 
                         # 기능 경로로 메뉴 탐색
-                        nav_done = navigate_by_menu(page, stg_base, depth, log_fn=lambda m: self.log_msg(m), sheet_name=sheet)
+                        # [FIX] "로그인 후 진입 화면 확인"류 TC는 실제 메뉴 클릭 없이
+                        # 로그인 직후 기본 화면 자체를 검증해야 하는데, 기존에는 이런 TC도
+                        # 매칭되는 메뉴가 없으면 무조건 시트명("문진 관리" 등)으로
+                        # 폴백 이동시켜버려서 검증 대상 화면 자체가 아닌 곳에서
+                        # 판정하는 문제가 있었음(TC1 사례). 이런 TC는 시트명 폴백을 끈다.
+                        NO_LANDING_NAV_KEYWORDS = ['진입 화면', '기본 화면', '초기 화면']
+                        skip_sheet_fallback = any(k in depth for k in NO_LANDING_NAV_KEYWORDS)
+                        effective_sheet_name = None if skip_sheet_fallback else sheet
+                        nav_done = navigate_by_menu(page, stg_base, depth, log_fn=lambda m: self.log_msg(m), sheet_name=effective_sheet_name)
                         if nav_done:
                             self.log_msg(f'  🧭 메뉴: {" > ".join(nav_done)}')
                         self.log_msg(f'  🌐 이동: {page.url}')
@@ -1018,8 +1026,14 @@ JSON: {{"actions":[
 
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
-                            # 로그아웃/탈퇴 등 위험 액션 차단
-                            danger_words = ['로그아웃','logout','탈퇴','삭제확인','계정삭제']
+                            # [FIX] 기존에는 "로그아웃"이라는 단어만 들어가도 무조건 차단해서,
+                            # "로그아웃 버튼 클릭 → 경고 팝업 확인 → 머무르기/나가기" 같은
+                            # 정상적인 검증 TC 자체가 실행 불가능했음.
+                            # 로그아웃 버튼 클릭 자체는 확인 팝업만 여는 안전한 동작이므로 허용하고,
+                            # 세션이 실제로 종료되는 "나가기" 확정 클릭만 (로그아웃/경고 문맥일 때) 차단한다.
+                            danger_words = ['탈퇴','삭제확인','계정삭제']
+                            if ('로그아웃' in depth or '경고' in depth) and '나가기' in desc:
+                                danger_words = danger_words + ['나가기']
                             if any(w in desc.lower() or w in sel.lower() for w in danger_words):
                                 self.log_msg(f'  ⚠ 위험 액션 차단: {desc}', 'warn'); continue
 
@@ -1030,7 +1044,25 @@ JSON: {{"actions":[
                                 try:
                                     el = page.locator(sel).first
                                     if el.is_visible(timeout=3000):
-                                        el.click(); page.wait_for_timeout(800)
+                                        url_before_click = page.url
+                                        el.click()
+                                        # [FIX] 클릭 후 고정 800ms 대기 대신, 모달/팝업이 뜨거나
+                                        # URL이 바뀌는(SPA 라우트 전환) 케이스라면 실제로 그렇게
+                                        # 될 때까지 기다린다. 둘 다 아니면 기존처럼 800ms 폴백.
+                                        # (LabConnect 모달 타이밍 문제와 같은 클래스의 버그로,
+                                        # "병원 계약 관리" 같은 메뉴 클릭 직후 화면 전환이
+                                        # 800ms 안에 안 끝나 판정이 들쭉날쭉하던 문제 방지)
+                                        try:
+                                            page.wait_for_selector(
+                                                'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                timeout=1200, state='visible')
+                                        except Exception:
+                                            try:
+                                                page.wait_for_function(
+                                                    "prevUrl => window.location.href !== prevUrl",
+                                                    arg=url_before_click, timeout=1500)
+                                            except Exception:
+                                                page.wait_for_timeout(800)
                                         self.log_msg(f'  ✓ 클릭: {desc}')
                                         actions_done.append(f'클릭: {desc}'); clicked = True
                                 except: pass
@@ -1048,7 +1080,19 @@ JSON: {{"actions":[
                                                 else:
                                                     el2 = page.locator(f'{tag}:has-text("{t}")').first
                                                 if el2.is_visible(timeout=1500):
-                                                    el2.click(); page.wait_for_timeout(800)
+                                                    url_before_click2 = page.url
+                                                    el2.click()
+                                                    try:
+                                                        page.wait_for_selector(
+                                                            'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                            timeout=1200, state='visible')
+                                                    except Exception:
+                                                        try:
+                                                            page.wait_for_function(
+                                                                "prevUrl => window.location.href !== prevUrl",
+                                                                arg=url_before_click2, timeout=1500)
+                                                        except Exception:
+                                                            page.wait_for_timeout(800)
                                                     self.log_msg(f'  ✓ 클릭(폴백): {t}')
                                                     actions_done.append(f'클릭: {t}'); clicked = True; break
                                             except: continue
