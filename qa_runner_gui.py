@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.11'
+APP_VERSION = '4.12'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -1183,17 +1183,24 @@ JSON: {{"actions":[
                             except: pass
 
                         # 예상치 못한 팝업/모달 감지 → 자동 닫기 시도
-                        # 단, 기능경로에 팝업/등록 관련 내용이 있으면 의도된 것이므로 닫지 않음
-                        popup_keywords = ['팝업', '모달', '등록] 버튼', '등록 버튼', 'popup', 'modal', '레이어']
-                        popup_intended = any(k in depth for k in popup_keywords)
+                        # 단, 기능경로/기대결과에 팝업/경고 관련 내용이 있으면 의도된 것이므로 닫지 않음
+                        popup_keywords = ['팝업', '모달', '경고', '등록] 버튼', '등록 버튼', 'popup', 'modal', '레이어']
+                        popup_intended = any(k in depth or k in expected for k in popup_keywords)
                         try:
                             modal_sel = 'div[role="dialog"], .modal, [class*="modal"], [class*="popup"], [class*="overlay"]'
                             modal = page.locator(modal_sel).first
                             if modal.is_visible(timeout=1000) and not popup_intended:
                                 self.log_msg(f'  🔒 팝업 감지 → 닫기 시도', 'warn')
                                 closed = False
-                                # 1차: X 버튼 클릭 시도
-                                # 모든 닫기 버튼 후보를 한번에 시도
+                                # [FIX] 기존에는 'div[role="dialog"] button:first-child',
+                                # '[class*="modal"] button:last-child' 같은 "묻지도 따지지도
+                                # 않는" 폴백 셀렉터가 있었음. 로그아웃 경고 팝업처럼
+                                # [머무르기][나가기] 두 버튼으로 구성된 모달에서, 이 폴백이
+                                # 실제로 "나가기"(세션 종료) 버튼을 클릭해버려서 위험 액션
+                                # 차단 로직을 우회하고 진짜 로그아웃이 실행되는 문제가 있었음.
+                                # → 명확히 안전한 텍스트/aria-label 버튼만 후보로 남기고,
+                                #   클릭 직전 버튼 텍스트에 위험 단어가 있으면 반드시 스킵한다.
+                                DANGEROUS_BTN_WORDS = ['나가기', '로그아웃', 'logout', '삭제', '탈퇴', '계정삭제', '확인']
                                 close_sels = [
                                     'button[aria-label="close"]',
                                     'button[aria-label="닫기"]',
@@ -1202,9 +1209,7 @@ JSON: {{"actions":[
                                     'button:has-text("✕")',
                                     'button:has-text("닫기")',
                                     'button:has-text("취소")',
-                                    '[class*="close"]',
-                                    'div[role="dialog"] button:first-child',
-                                    '[class*="modal"] button:last-child',
+                                    'button:has-text("머무르기")',
                                 ]
                                 combined_sel = ', '.join(close_sels)
                                 try:
@@ -1212,6 +1217,11 @@ JSON: {{"actions":[
                                     for btn in btns[:5]:
                                         try:
                                             if btn.is_visible(timeout=200):
+                                                btn_text = ''
+                                                try: btn_text = (btn.inner_text(timeout=300) or '').strip()
+                                                except: pass
+                                                if any(w in btn_text for w in DANGEROUS_BTN_WORDS):
+                                                    continue  # 위험 단어 포함 버튼은 절대 클릭하지 않음
                                                 btn.click()
                                                 page.wait_for_timeout(500)
                                                 closed = True
@@ -1219,7 +1229,7 @@ JSON: {{"actions":[
                                                 break
                                         except: continue
                                 except: pass
-                                # 2차: ESC 키 시도
+                                # 2차: ESC 키 시도 (가장 안전 - 아무 것도 확정하지 않음)
                                 if not closed:
                                     page.keyboard.press('Escape')
                                     page.wait_for_timeout(800)
