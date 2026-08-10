@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.14'
+APP_VERSION = '4.17'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -857,6 +857,53 @@ class QAWorkerApp:
                             page.goto(home_url, timeout=20000)
                         page.wait_for_load_state('networkidle', timeout=15000)
                         page.wait_for_timeout(2000)  # 사이드바 완전 렌더링 대기
+
+                        # [REVERT] "로그인 연장" 버튼을 매 TC마다 자동 클릭하던 로직 제거.
+                        # 세션 연장 시간을 1시간→4시간으로 늘려도 로그아웃이 재발한 것으로
+                        # 보아, 실제 세션 타임아웃이 원인이 아니라 이 버튼이 실제로 무슨
+                        # 동작을 하는지 검증 없이 반복 클릭한 것 자체가 오히려 로그아웃을
+                        # 유발했을 가능성이 높다고 판단해 제거함. 아래 "로그인 화면 감지 시
+                        # 자동 재로그인" 안전장치만 남겨둔다 (이건 능동적으로 뭘 누르지 않고
+                        # 이미 로그아웃된 상태를 감지했을 때만 반응하므로 안전함).
+
+                        # [FIX] 세션 연장을 놓쳐서 실제로 로그아웃된 경우, 이후 TC가
+                        # 전부 로그인 화면에 머무는 채로 도미노 실패하는 것을 막기 위해
+                        # 로그인 화면으로 밀려난 게 감지되면 즉시 재로그인을 시도한다.
+                        if ('/login' in page.url or '/sign-in' in page.url) and login_type == 'idpw' and stg_id:
+                            self.log_msg(f'  ⚠ 세션 만료 감지 → 재로그인 시도', 'warn')
+                            try:
+                                id_input_re = None
+                                for sel in ['input[type="text"]', 'input[type="email"]', 'input[name*="id" i]', 'input[name*="email" i]']:
+                                    try:
+                                        cand = page.locator(sel).first
+                                        if cand.is_visible(timeout=2000):
+                                            id_input_re = cand; break
+                                    except: continue
+                                if id_input_re:
+                                    id_input_re.fill(stg_id)
+                                    pw_input_re = page.locator('input[type="password"]').first
+                                    pw_input_re.fill(stg_pw)
+                                    re_clicked = False
+                                    for rsel in ['button[type="submit"]', 'button:has-text("로그인")', 'button:has-text("Login")', 'input[type="submit"]']:
+                                        try:
+                                            rbtn = page.locator(rsel).first
+                                            if rbtn.is_visible(timeout=1500):
+                                                rbtn.click(); re_clicked = True; break
+                                        except: continue
+                                    if not re_clicked:
+                                        pw_input_re.press('Enter')
+                                    page.wait_for_load_state('networkidle', timeout=15000)
+                                    page.wait_for_timeout(1500)
+                                    if '/login' not in page.url and '/sign-in' not in page.url:
+                                        self.log_msg(f'  ✅ 재로그인 성공', 'pass')
+                                        # 재로그인 후 원래 이동하려던 화면으로 다시 이동
+                                        page.goto(home_url, timeout=20000, wait_until='domcontentloaded')
+                                        page.wait_for_load_state('networkidle', timeout=15000)
+                                        page.wait_for_timeout(1500)
+                                    else:
+                                        self.log_msg(f'  ✗ 재로그인 실패', 'fail')
+                            except Exception as relogin_err:
+                                self.log_msg(f'  ✗ 재로그인 중 오류: {str(relogin_err)[:80]}', 'fail')
 
                         # 기능 경로로 메뉴 탐색
                         # [FIX] "로그인 후 진입 화면 확인"류 TC는 실제 메뉴 클릭 없이
