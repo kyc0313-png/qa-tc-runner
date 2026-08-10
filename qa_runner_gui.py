@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.13'
+APP_VERSION = '4.14'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -1026,12 +1026,19 @@ JSON: {{"actions":[
 
                             sel = action.get('selector','')
                             dangerous = ['rgba(','rgb(','style=','!important']
-                            # [FIX] 기존에는 "로그아웃"이라는 단어만 들어가도 무조건 차단해서,
-                            # "로그아웃 버튼 클릭 → 경고 팝업 확인 → 머무르기/나가기" 같은
-                            # 정상적인 검증 TC 자체가 실행 불가능했음.
-                            # 로그아웃 버튼 클릭 자체는 확인 팝업만 여는 안전한 동작이므로 허용하고,
-                            # 세션이 실제로 종료되는 "나가기" 확정 클릭만 (로그아웃/경고 문맥일 때) 차단한다.
+                            # [FIX] 이전에는 "로그아웃"이라는 단어가 desc에 있으면 무조건
+                            # 허용하도록 풀어놨는데, 이게 랩커넥트처럼 로그아웃을 의도적으로
+                            # 테스트하는 TC가 하나도 없는 서비스에서까지 적용돼서, 69건 TC를
+                            # 도는 도중 우연히 "로그아웃"이 포함된 요소가 클릭되어 실제
+                            # 로그아웃이 발생하고 이후 TC가 전부 로그인 안 된 상태로
+                            # 연쇄 실패하는 회귀를 만들었음.
+                            # → "로그아웃" 클릭은 TC 기능경로 자체가 명시적으로 [로그아웃]
+                            # 버튼을 테스트 대상으로 삼고 있을 때만 허용하고, 그 외에는
+                            # (다른 화면을 검증하다 우연히 튄 클릭이라면) 항상 차단한다.
                             danger_words = ['탈퇴','삭제확인','계정삭제']
+                            logout_is_intended_target = ('[로그아웃]' in depth) or ('로그아웃] 버튼' in depth)
+                            if not logout_is_intended_target:
+                                danger_words = danger_words + ['로그아웃','logout']
                             if ('로그아웃' in depth or '경고' in depth) and '나가기' in desc:
                                 danger_words = danger_words + ['나가기']
                             if any(w in desc.lower() or w in sel.lower() for w in danger_words):
