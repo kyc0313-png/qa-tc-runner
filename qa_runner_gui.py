@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.12'
+APP_VERSION = '4.13'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -914,8 +914,8 @@ class QAWorkerApp:
 6. Enter 키가 필요하면 반드시 type:press, key:Enter 사용
 7. 기능경로에 "enter 키" 또는 "엔터" 언급이 있으면 반드시 press Enter 액션 추가
 8. 검색 입력필드는 반드시 input[placeholder*="검색"], input[placeholder*="환자"], input[placeholder*="이름"], input[type="search"] 순으로 시도
-9. 기능경로 끝이 "확인" "노출 확인" "확인하기"이면 클릭 없이 wait(500) 액션만 생성
-10. [버튼명] 버튼 클릭이 기능경로에 명시된 경우에만 해당 버튼 클릭 - 그 외 "등록" "추가" 버튼 클릭 절대 금지
+9. 기능경로 **전체에 "클릭" 동작이 전혀 없고** 끝이 "확인" "노출 확인" "확인하기"이면 클릭 없이 wait(500) 액션만 생성. 단, 기능경로 중간에 "클릭"이라는 단어가 포함되어 있으면(예: "...입력필드 클릭 시 테두리 색상 변화 확인") 문장이 "확인"으로 끝나더라도 그 클릭 액션은 반드시 생성할 것 - "확인"으로 끝난다고 무조건 클릭을 생략하지 말 것
+10. [버튼명] 버튼 클릭이 기능경로에 명시된 경우에만 해당 버튼 클릭 - 기능경로에 대괄호로 명시되지 않은 다른 버튼(예: "수정", "삭제", "등록", "추가" 등)은 화면에 보이더라도 절대 클릭 금지. 기능경로가 상세정보 노출 확인처럼 조회성 동작으로 끝나면 그 이상 화면을 진행시키는 추가 클릭을 생성하지 말 것
 11. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
 
 JSON: {{"actions":[
@@ -1044,27 +1044,40 @@ JSON: {{"actions":[
                                 try:
                                     el = page.locator(sel).first
                                     if el.is_visible(timeout=3000):
-                                        url_before_click = page.url
-                                        el.click()
-                                        # [FIX] 클릭 후 고정 800ms 대기 대신, 모달/팝업이 뜨거나
-                                        # URL이 바뀌는(SPA 라우트 전환) 케이스라면 실제로 그렇게
-                                        # 될 때까지 기다린다. 둘 다 아니면 기존처럼 800ms 폴백.
-                                        # (LabConnect 모달 타이밍 문제와 같은 클래스의 버그로,
-                                        # "병원 계약 관리" 같은 메뉴 클릭 직후 화면 전환이
-                                        # 800ms 안에 안 끝나 판정이 들쭉날쭉하던 문제 방지)
-                                        try:
-                                            page.wait_for_selector(
-                                                'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
-                                                timeout=1200, state='visible')
-                                        except Exception:
+                                        # [FIX] 비활성화된 버튼(예: 미입력 상태의 [중복확인])을
+                                        # Playwright가 클릭하려 하면 "not enabled" 예외를 던져서
+                                        # 무조건 "클릭 실패"로 기록되던 문제가 있었음. 이런 TC는
+                                        # 원래 "비활성 상태 유지, 클릭해도 반응 없음"이 기대결과이므로
+                                        # 클릭을 시도하는 대신 비활성 상태 자체를 인식해 기록한다.
+                                        is_disabled = False
+                                        try: is_disabled = el.is_disabled(timeout=500)
+                                        except: pass
+                                        if is_disabled:
+                                            self.log_msg(f'  ⓘ 버튼 비활성화 상태 확인: {desc}', 'info')
+                                            actions_done.append(f'비활성화 확인: {desc}')
+                                            clicked = True
+                                        else:
+                                            url_before_click = page.url
+                                            el.click()
+                                            # [FIX] 클릭 후 고정 800ms 대기 대신, 모달/팝업이 뜨거나
+                                            # URL이 바뀌는(SPA 라우트 전환) 케이스라면 실제로 그렇게
+                                            # 될 때까지 기다린다. 둘 다 아니면 기존처럼 800ms 폴백.
+                                            # (LabConnect 모달 타이밍 문제와 같은 클래스의 버그로,
+                                            # "병원 계약 관리" 같은 메뉴 클릭 직후 화면 전환이
+                                            # 800ms 안에 안 끝나 판정이 들쭉날쭉하던 문제 방지)
                                             try:
-                                                page.wait_for_function(
-                                                    "prevUrl => window.location.href !== prevUrl",
-                                                    arg=url_before_click, timeout=1500)
+                                                page.wait_for_selector(
+                                                    'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                    timeout=1200, state='visible')
                                             except Exception:
-                                                page.wait_for_timeout(800)
-                                        self.log_msg(f'  ✓ 클릭: {desc}')
-                                        actions_done.append(f'클릭: {desc}'); clicked = True
+                                                try:
+                                                    page.wait_for_function(
+                                                        "prevUrl => window.location.href !== prevUrl",
+                                                        arg=url_before_click, timeout=1500)
+                                                except Exception:
+                                                    page.wait_for_timeout(800)
+                                            self.log_msg(f'  ✓ 클릭: {desc}')
+                                            actions_done.append(f'클릭: {desc}'); clicked = True
                                 except: pass
                                 if not clicked:
                                     # [FIX] "환자","등록","관리" 같은 범용 단어는 substring(has-text) 매칭 시
