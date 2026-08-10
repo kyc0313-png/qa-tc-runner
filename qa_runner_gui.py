@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.17'
+APP_VERSION = '4.18'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -131,6 +131,21 @@ KEYWORD_URL_MAP = [
     ('포인트', '/point/clinic-point-history/list'),
     ('상담', '/care/user-list'),
 ]
+
+def get_scoped_locator(page, sel):
+    """모달/팝업이 열려 있으면 그 안에서 먼저 셀렉터를 찾고, 없으면 페이지 전체에서 찾는다.
+    같은 placeholder나 텍스트를 가진 요소가 배경 화면과 팝업 양쪽에 동시에 있을 때
+    (예: 환자관리 상단 검색창과 환자등록 팝업 안 '환자명' 입력필드가 둘 다
+    placeholder='환자명'인 경우), 팝업이 열려 있는데도 배경 쪽 요소가 잘못
+    선택되어 입력이 팝업 뒤로 들어가버리는 문제를 막기 위함."""
+    try:
+        modal = page.locator('div[role="dialog"], .modal, [class*="modal"], [class*="popup"]').first
+        if modal.is_visible(timeout=300):
+            scoped = modal.locator(sel)
+            if scoped.count() > 0:
+                return scoped.first
+    except: pass
+    return page.locator(sel).first
 
 def clean_text(text):
     if not text: return ''
@@ -997,7 +1012,14 @@ JSON: {{"actions":[
 
                         # 검색 입력필드 관련 키워드 체크
                         depth_lower = depth.lower()
-                        has_search_field = any(k in depth for k in ['검색어 입력필드', '검색 입력필드', '검색필드', '입력필드'])
+                        # [FIX] 기존에는 '입력필드'라는 단어 하나만 있어도 트리거됐는데,
+                        # 환자등록 팝업 안의 다른 필드들(환자등록번호/환자명/생년월일/
+                        # 휴대전화번호/신장/체중 입력필드)도 전부 "~입력필드"라는 표현을
+                        # 쓰기 때문에, 팝업 TC에서까지 상단 검색창이 잘못 대상이 되어
+                        # 값이 들어가고, 정작 팝업 필드에 대한 실제 입력 액션은 "이미
+                        # 처리됨"으로 스킵되는 문제가 있었음. "검색" 문맥이 명시된
+                        # 경우에만 상단 검색창 전용 처리로 진입하도록 좁힌다.
+                        has_search_field = any(k in depth for k in ['검색어 입력필드', '검색 입력필드', '검색필드']) or '환자명,환자등록번호,휴대전화번호' in depth
 
                         if has_search_field:
                             # 입력값이 있는지 확인 (따옴표 안의 값)
@@ -1096,7 +1118,7 @@ JSON: {{"actions":[
                                     self.log_msg(f'  ⚠ 셀렉터 차단: {desc}', 'warn'); continue
                                 clicked = False
                                 try:
-                                    el = page.locator(sel).first
+                                    el = get_scoped_locator(page, sel)
                                     if el.is_visible(timeout=3000):
                                         # [FIX] 비활성화된 버튼(예: 미입력 상태의 [중복확인])을
                                         # Playwright가 클릭하려 하면 "not enabled" 예외를 던져서
@@ -1179,8 +1201,22 @@ JSON: {{"actions":[
                             elif atype == 'fill':
                                 val = str(action.get('value','테스트'))
                                 try:
-                                    # 검색 입력필드면 placeholder 기반으로 정확히 찾기
-                                    if any(k in desc for k in ['검색', '입력필드', '환자명', 'placeholder']):
+                                    modal_open_now = False
+                                    try:
+                                        modal_open_now = page.locator(
+                                            'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]'
+                                        ).first.is_visible(timeout=300)
+                                    except: pass
+
+                                    # [FIX] "환자명"/"입력필드" 키워드가 desc에 있으면 상단
+                                    # 검색창 셀렉터를 최우선으로 시도하던 로직이, 환자등록
+                                    # 팝업이 열려 있을 때도 그대로 작동해서 팝업 뒤에 가려진
+                                    # 상단 검색창(placeholder도 '환자명'으로 동일)에 값을
+                                    # 넣어버리는 문제가 있었음 — 사용자 눈엔 팝업에 아무것도
+                                    # 입력이 안 되는 것처럼 보이는 원인이었음. 팝업이 열려
+                                    # 있을 때는 이 상단 검색창 전용 override를 쓰지 않는다.
+                                    el = None
+                                    if (not modal_open_now) and any(k in desc for k in ['검색', '입력필드', '환자명', 'placeholder']):
                                         for search_sel in [
                                             'input[placeholder*="환자명"]',
                                             'input[placeholder*="검색"]',
@@ -1193,10 +1229,8 @@ JSON: {{"actions":[
                                                     el = candidate
                                                     break
                                             except: continue
-                                        else:
-                                            el = page.locator(sel).first
-                                    else:
-                                        el = page.locator(sel).first
+                                    if el is None:
+                                        el = get_scoped_locator(page, sel)
                                     if el.is_visible(timeout=3000):
                                         el.fill(val); page.wait_for_timeout(500)
                                         self.log_msg(f'  ✓ 입력: {desc}')
