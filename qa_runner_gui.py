@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.18'
+APP_VERSION = '4.19'
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
@@ -979,6 +979,7 @@ class QAWorkerApp:
 9. 기능경로 **전체에 "클릭" 동작이 전혀 없고** 끝이 "확인" "노출 확인" "확인하기"이면 클릭 없이 wait(500) 액션만 생성. 단, 기능경로 중간에 "클릭"이라는 단어가 포함되어 있으면(예: "...입력필드 클릭 시 테두리 색상 변화 확인") 문장이 "확인"으로 끝나더라도 그 클릭 액션은 반드시 생성할 것 - "확인"으로 끝난다고 무조건 클릭을 생략하지 말 것
 10. [버튼명] 버튼 클릭이 기능경로에 명시된 경우에만 해당 버튼 클릭 - 기능경로에 대괄호로 명시되지 않은 다른 버튼(예: "수정", "삭제", "등록", "추가" 등)은 화면에 보이더라도 절대 클릭 금지. 기능경로가 상세정보 노출 확인처럼 조회성 동작으로 끝나면 그 이상 화면을 진행시키는 추가 클릭을 생성하지 말 것
 11. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
+12. 텍스트가 없는 아이콘 전용 버튼(엑셀 다운로드, 페이지네이션 이전/다음 화살표 등)은 button:has-text()로 못 찾으므로, aria-label/title 속성이나 SVG class 기반으로 셀렉터를 만들 것. 예: button[aria-label*='다운로드'], button[title*='다운로드'], [class*='download'], .pagination button:nth-child(n), button[aria-label*='다음'], button[aria-label*='이전']
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
@@ -1186,6 +1187,32 @@ JSON: {{"actions":[
                                                     actions_done.append(f'클릭: {t}'); clicked = True; break
                                             except: continue
                                         if clicked: break
+                                if not clicked:
+                                    # [FIX] 엑셀 다운로드, 페이지네이션 화살표처럼 텍스트가
+                                    # 전혀 없는 아이콘 버튼은 has-text 폴백으로도 못 찾으므로,
+                                    # aria-label/title 속성 기반으로 한 번 더 시도한다.
+                                    for t in hints[:3]:
+                                        if t in GENERIC_FALLBACK_WORDS or clicked:
+                                            continue
+                                        try:
+                                            el3 = page.locator(f'[aria-label*="{t}"], [title*="{t}"]').first
+                                            if el3.is_visible(timeout=1000):
+                                                url_before_click3 = page.url
+                                                el3.click()
+                                                try:
+                                                    page.wait_for_selector(
+                                                        'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                        timeout=1200, state='visible')
+                                                except Exception:
+                                                    try:
+                                                        page.wait_for_function(
+                                                            "prevUrl => window.location.href !== prevUrl",
+                                                            arg=url_before_click3, timeout=1500)
+                                                    except Exception:
+                                                        page.wait_for_timeout(800)
+                                                self.log_msg(f'  ✓ 클릭(아이콘 폴백): {t}')
+                                                actions_done.append(f'클릭: {t}'); clicked = True
+                                        except: continue
                                 if not clicked:
                                     self.log_msg(f'  ✗ 클릭 실패: {desc}', 'warn')
                                     actions_done.append(f'클릭 실패: {desc}')
