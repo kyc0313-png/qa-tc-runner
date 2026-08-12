@@ -19,11 +19,22 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.19'
-GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
+APP_VERSION = '4.21'
+
+# [CHANGE] GitHub Releases → Bitbucket Downloads로 전환.
+# 실제 워크스페이스/저장소 slug로 반드시 교체해야 합니다.
+BITBUCKET_WORKSPACE = 'YOUR_WORKSPACE'   # 예: ikoob
+BITBUCKET_REPO_SLUG = 'qa-tc-runner'
+BITBUCKET_DOWNLOADS_URL = f'https://api.bitbucket.org/2.0/repositories/{BITBUCKET_WORKSPACE}/{BITBUCKET_REPO_SLUG}/downloads'
+# 사내 Bitbucket이 Private 저장소라면 다운로드 목록 조회/파일 다운로드 모두 인증이
+# 필요할 수 있습니다. 앱 비밀번호(App Password) 발급 후 아래에 채워 넣으세요.
+# (App Password는 Personal settings > App passwords에서 발급, 'Downloads' 권한 필요)
+BITBUCKET_AUTH_USER = ''      # 예: your_bitbucket_id
+BITBUCKET_AUTH_APP_PW = ''    # 예: ATBBxxxxxxxxxxxx
 
 def get_latest_release_info():
-    """GitHub 최신 릴리즈 정보 조회 (네트워크만, UI 없음)"""
+    """Bitbucket Downloads에서 최신 버전 exe 정보 조회 (네트워크만, UI 없음).
+    업로드 파일명에 버전이 포함되어 있어야 합니다. 예: qa_runner_gui_v4.20.exe"""
     log_path = os.path.join(tempfile.gettempdir(), 'qa_update_check.log')
     def dbg(msg):
         try:
@@ -33,24 +44,38 @@ def get_latest_release_info():
     import traceback
     dbg(f'=== 업데이트 체크 시작 (현재버전: {APP_VERSION}, frozen: {getattr(sys, "frozen", False)}) ===')
     try:
-        resp = requests.get(GITHUB_RELEASE_URL, timeout=10)
+        auth = (BITBUCKET_AUTH_USER, BITBUCKET_AUTH_APP_PW) if BITBUCKET_AUTH_USER else None
+        resp = requests.get(BITBUCKET_DOWNLOADS_URL, auth=auth, timeout=10)
         dbg(f'응답 코드: {resp.status_code}')
         if resp.status_code != 200:
             dbg(f'응답 실패: {resp.text[:300]}')
             return None
         data = resp.json()
-        latest_tag = data.get('tag_name','').lstrip('v')
+        files = data.get('values', [])
+        # 파일명에서 버전 숫자(예: v4.20, 4.20) 추출 후 가장 높은 버전 선택
+        candidates = []
+        for f in files:
+            name = f.get('name', '')
+            if not name.endswith('.exe'):
+                continue
+            m = re.search(r'v?(\d+\.\d+)', name)
+            if m:
+                candidates.append((m.group(1), f))
+        dbg(f'exe 후보 {len(candidates)}개')
+        if not candidates:
+            return None
+        candidates.sort(key=lambda x: [int(p) for p in x[0].split('.')], reverse=True)
+        latest_tag, latest_file = candidates[0]
         dbg(f'최신 태그: {latest_tag}')
         if not latest_tag or latest_tag == APP_VERSION:
             dbg('이미 최신 버전')
             return None
-        assets = data.get('assets', [])
-        exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
-        if not exe_asset:
-            dbg('exe 에셋을 찾을 수 없음')
+        download_url = latest_file.get('links', {}).get('self', {}).get('href', '')
+        if not download_url:
+            dbg('다운로드 URL을 찾을 수 없음')
             return None
         dbg(f'업데이트 발견: {APP_VERSION} -> {latest_tag}')
-        return {'version': latest_tag, 'url': exe_asset['browser_download_url']}
+        return {'version': latest_tag, 'url': download_url}
     except Exception as e:
         dbg(f'예외 발생: {e}')
         dbg(traceback.format_exc())
@@ -72,7 +97,14 @@ def do_update(download_url, root):
             try: os.remove(p)
             except: pass
 
-    urllib.request.urlretrieve(download_url, new_path)
+    # [CHANGE] urllib.request.urlretrieve는 인증 헤더를 못 실어서, Bitbucket이
+    # Private 저장소면 다운로드가 실패할 수 있음. requests + 앱 비밀번호 인증으로 교체.
+    auth = (BITBUCKET_AUTH_USER, BITBUCKET_AUTH_APP_PW) if BITBUCKET_AUTH_USER else None
+    resp = requests.get(download_url, auth=auth, timeout=60, stream=True)
+    resp.raise_for_status()
+    with open(new_path, 'wb') as f:
+        for chunk in resp.iter_content(chunk_size=8192):
+            f.write(chunk)
     if not os.path.exists(new_path):
         raise Exception('다운로드 파일이 생성되지 않았습니다')
 
@@ -1162,8 +1194,11 @@ JSON: {{"actions":[
                                     # 이런 단어들은 exact 텍스트 매칭으로 제한한다.
                                     GENERIC_FALLBACK_WORDS = {'환자','등록','관리','메뉴','버튼','클릭','선택','확인','입력','검색','노출','화면'}
                                     hints = re.findall(r'[가-힣a-zA-Z0-9]{2,}', desc)
+                                    # [FIX] 기존엔 button/label/a/span 태그만 뒤졌는데, 환자 목록의
+                                    # "관태환"/"김구미" 같은 행(row)은 보통 tr/td/li/div로 구성돼
+                                    # 있어서 이 범위 밖이라 계속 클릭 실패로 기록되던 문제가 있었음.
                                     for t in hints[:2]:
-                                        for tag in ['button','label','a','span']:
+                                        for tag in ['button','label','a','span','tr','td','li','div']:
                                             try:
                                                 if t in GENERIC_FALLBACK_WORDS:
                                                     el2 = page.locator(tag).get_by_text(t, exact=True).first
@@ -1187,6 +1222,30 @@ JSON: {{"actions":[
                                                     actions_done.append(f'클릭: {t}'); clicked = True; break
                                             except: continue
                                         if clicked: break
+                                if not clicked:
+                                    # [FIX] 페이지네이션 화살표(<, >, <<, >>)처럼 TC 설명은
+                                    # "다음"/"이전"이라는 한글 단어로 되어 있지만 실제 화면엔
+                                    # 그 텍스트가 없고 기호 자체만 있는 경우, 위 hints 정규식이
+                                    # 2글자 미만 기호를 아예 못 뽑아서 매칭이 안 되던 문제가 있음.
+                                    # depth/desc 원문에서 <, >, <<, >> 기호를 직접 추출해 시도한다.
+                                    PAGINATION_SYMBOLS = re.findall(r'(<<|>>|<|>)', depth + ' ' + desc)
+                                    for sym in dict.fromkeys(PAGINATION_SYMBOLS):  # 중복 제거, 순서 유지
+                                        if clicked: break
+                                        for tag in ['button','a','li','span']:
+                                            try:
+                                                el4 = page.locator(f'{tag}:has-text("{sym}")').first
+                                                if el4.is_visible(timeout=1000):
+                                                    url_before_click4 = page.url
+                                                    el4.click()
+                                                    try:
+                                                        page.wait_for_function(
+                                                            "prevUrl => window.location.href !== prevUrl",
+                                                            arg=url_before_click4, timeout=1500)
+                                                    except Exception:
+                                                        page.wait_for_timeout(800)
+                                                    self.log_msg(f'  ✓ 클릭(페이지네이션 기호): {sym}')
+                                                    actions_done.append(f'클릭: {sym}'); clicked = True; break
+                                            except: continue
                                 if not clicked:
                                     # [FIX] 엑셀 다운로드, 페이지네이션 화살표처럼 텍스트가
                                     # 전혀 없는 아이콘 버튼은 has-text 폴백으로도 못 찾으므로,
