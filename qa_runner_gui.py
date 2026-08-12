@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.21'
+APP_VERSION = '4.22'
 
 # [CHANGE] GitHub Releases → Bitbucket Downloads로 전환.
 # 실제 워크스페이스/저장소 slug로 반드시 교체해야 합니다.
@@ -1027,8 +1027,16 @@ JSON: {{"actions":[
                                 r = client.chat.completions.create(
                                     model='gpt-5.6-luna',
                                     messages=[{'role':'user','content':prompt_action}],
-                                    max_completion_tokens=600, timeout=40)
-                                raw = re.sub(r'```json|```','',r.choices[0].message.content.strip()).strip()
+                                    # [FIX] 600 토큰은 추론형 모델이 내부 추론에 다 써버리면
+                                    # 화면에 보일 JSON 응답이 아예 안 나오는 경우가 있었음
+                                    # (특히 TC44~51처럼 검증 항목이 많은 복잡한 TC에서
+                                    # "Expecting value: char 0" = 완전 빈 응답으로 반복 실패).
+                                    # 여유 있게 올려서 추론 + 실제 출력 둘 다 감당하게 함.
+                                    max_completion_tokens=1500, timeout=50)
+                                content = r.choices[0].message.content
+                                if not content or not content.strip():
+                                    raise ValueError('빈 응답 (추론 토큰 소모로 출력 없음)')
+                                raw = re.sub(r'```json|```','', content.strip()).strip()
                                 actions = json.loads(raw).get('actions',[])
                                 self.log_msg(f'  📋 액션 {len(actions)}건')
                                 break
