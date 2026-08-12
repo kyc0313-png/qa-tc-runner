@@ -19,22 +19,20 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.22'
+APP_VERSION = '4.23'
 
-# [CHANGE] GitHub Releases → Bitbucket Downloads로 전환.
-# 실제 워크스페이스/저장소 slug로 반드시 교체해야 합니다.
-BITBUCKET_WORKSPACE = 'YOUR_WORKSPACE'   # 예: ikoob
-BITBUCKET_REPO_SLUG = 'qa-tc-runner'
-BITBUCKET_DOWNLOADS_URL = f'https://api.bitbucket.org/2.0/repositories/{BITBUCKET_WORKSPACE}/{BITBUCKET_REPO_SLUG}/downloads'
-# 사내 Bitbucket이 Private 저장소라면 다운로드 목록 조회/파일 다운로드 모두 인증이
-# 필요할 수 있습니다. 앱 비밀번호(App Password) 발급 후 아래에 채워 넣으세요.
-# (App Password는 Personal settings > App passwords에서 발급, 'Downloads' 권한 필요)
-BITBUCKET_AUTH_USER = ''      # 예: your_bitbucket_id
-BITBUCKET_AUTH_APP_PW = ''    # 예: ATBBxxxxxxxxxxxx
+# [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
+# 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
+# 체크 로직만 먼저 Bitbucket을 바라보도록 바뀌어서, 존재하지 않는 워크스페이스를
+# 조회하다 조용히 실패 → "업데이트 없음"으로 끝나 4.22가 배포돼도 기존 사용자들이
+# 자동 업데이트를 못 받는 문제가 있었음. 빗버킷 이관이 실제로 완료되면 아래
+# GITHUB_RELEASE_URL 블록을 다시 BITBUCKET_* 블록으로 교체하면 됨(이 파일 하단
+# BITBUCKET 관련 코드는 참고용으로 남겨두지 않고 삭제했으니, 필요 시 이전 버전
+# 커밋 이력에서 다시 가져올 것).
+GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
-    """Bitbucket Downloads에서 최신 버전 exe 정보 조회 (네트워크만, UI 없음).
-    업로드 파일명에 버전이 포함되어 있어야 합니다. 예: qa_runner_gui_v4.20.exe"""
+    """GitHub 최신 릴리즈 정보 조회 (네트워크만, UI 없음)"""
     log_path = os.path.join(tempfile.gettempdir(), 'qa_update_check.log')
     def dbg(msg):
         try:
@@ -44,38 +42,24 @@ def get_latest_release_info():
     import traceback
     dbg(f'=== 업데이트 체크 시작 (현재버전: {APP_VERSION}, frozen: {getattr(sys, "frozen", False)}) ===')
     try:
-        auth = (BITBUCKET_AUTH_USER, BITBUCKET_AUTH_APP_PW) if BITBUCKET_AUTH_USER else None
-        resp = requests.get(BITBUCKET_DOWNLOADS_URL, auth=auth, timeout=10)
+        resp = requests.get(GITHUB_RELEASE_URL, timeout=10)
         dbg(f'응답 코드: {resp.status_code}')
         if resp.status_code != 200:
             dbg(f'응답 실패: {resp.text[:300]}')
             return None
         data = resp.json()
-        files = data.get('values', [])
-        # 파일명에서 버전 숫자(예: v4.20, 4.20) 추출 후 가장 높은 버전 선택
-        candidates = []
-        for f in files:
-            name = f.get('name', '')
-            if not name.endswith('.exe'):
-                continue
-            m = re.search(r'v?(\d+\.\d+)', name)
-            if m:
-                candidates.append((m.group(1), f))
-        dbg(f'exe 후보 {len(candidates)}개')
-        if not candidates:
-            return None
-        candidates.sort(key=lambda x: [int(p) for p in x[0].split('.')], reverse=True)
-        latest_tag, latest_file = candidates[0]
+        latest_tag = data.get('tag_name','').lstrip('v')
         dbg(f'최신 태그: {latest_tag}')
         if not latest_tag or latest_tag == APP_VERSION:
             dbg('이미 최신 버전')
             return None
-        download_url = latest_file.get('links', {}).get('self', {}).get('href', '')
-        if not download_url:
-            dbg('다운로드 URL을 찾을 수 없음')
+        assets = data.get('assets', [])
+        exe_asset = next((a for a in assets if a['name'].endswith('.exe')), None)
+        if not exe_asset:
+            dbg('exe 에셋을 찾을 수 없음')
             return None
         dbg(f'업데이트 발견: {APP_VERSION} -> {latest_tag}')
-        return {'version': latest_tag, 'url': download_url}
+        return {'version': latest_tag, 'url': exe_asset['browser_download_url']}
     except Exception as e:
         dbg(f'예외 발생: {e}')
         dbg(traceback.format_exc())
@@ -97,14 +81,7 @@ def do_update(download_url, root):
             try: os.remove(p)
             except: pass
 
-    # [CHANGE] urllib.request.urlretrieve는 인증 헤더를 못 실어서, Bitbucket이
-    # Private 저장소면 다운로드가 실패할 수 있음. requests + 앱 비밀번호 인증으로 교체.
-    auth = (BITBUCKET_AUTH_USER, BITBUCKET_AUTH_APP_PW) if BITBUCKET_AUTH_USER else None
-    resp = requests.get(download_url, auth=auth, timeout=60, stream=True)
-    resp.raise_for_status()
-    with open(new_path, 'wb') as f:
-        for chunk in resp.iter_content(chunk_size=8192):
-            f.write(chunk)
+    urllib.request.urlretrieve(download_url, new_path)
     if not os.path.exists(new_path):
         raise Exception('다운로드 파일이 생성되지 않았습니다')
 
