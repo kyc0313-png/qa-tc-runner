@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.24'
+APP_VERSION = '4.25'
 
 # [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
 # 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
@@ -989,11 +989,13 @@ class QAWorkerApp:
 10. [버튼명] 버튼 클릭이 기능경로에 명시된 경우에만 해당 버튼 클릭 - 기능경로에 대괄호로 명시되지 않은 다른 버튼(예: "수정", "삭제", "등록", "추가" 등)은 화면에 보이더라도 절대 클릭 금지. 기능경로가 상세정보 노출 확인처럼 조회성 동작으로 끝나면 그 이상 화면을 진행시키는 추가 클릭을 생성하지 말 것
 11. 입력 후 조회/검색 버튼이 없으면 반드시 press Enter 액션 추가
 12. 텍스트가 없는 아이콘 전용 버튼(엑셀 다운로드, 페이지네이션 이전/다음 화살표 등)은 button:has-text()로 못 찾으므로, aria-label/title 속성이나 SVG class 기반으로 셀렉터를 만들 것. 예: button[aria-label*='다운로드'], button[title*='다운로드'], [class*='download'], .pagination button:nth-child(n), button[aria-label*='다음'], button[aria-label*='이전']
+13. 기능경로에 "hover", "마우스 오버", "마우스오버", "마우스 올리면" 같은 표현이 있으면 절대 click 액션을 만들지 말고 반드시 type:"hover" 액션을 생성할 것 (클릭하면 툴팁이 아니라 다른 동작이 실행되어 검증이 무효화됨)
 
 JSON: {{"actions":[
   {{"type":"click","selector":"button:has-text('조회')","description":"조회"}},
   {{"type":"fill","selector":"input[placeholder*='검색']","value":"테스트","description":"검색어 입력"}},
   {{"type":"drag","source":"셀렉터","target":"셀렉터","description":"드래그"}},
+  {{"type":"hover","selector":"셀렉터","description":"마우스 호버"}},
   {{"type":"wait","ms":500}}
 ]}}
 액션없으면: {{"actions":[]}}"""
@@ -1352,6 +1354,54 @@ JSON: {{"actions":[
                                 except Exception as e:
                                     self.log_msg(f'  ✗ 드래그 실패: {desc}', 'warn')
                                     actions_done.append(f'드래그 실패: {desc}')
+
+                            elif atype == 'hover':
+                                # [FIX] "마우스 hover"로 툴팁 노출을 확인하는 TC(예: 엑셀
+                                # 다운로드 아이콘 hover)가 click 액션으로 잘못 생성되면
+                                # 툴팁이 절대 안 뜨므로 항상 실패했음. hover 전용 실행 경로.
+                                hovered = False
+                                try:
+                                    el = get_scoped_locator(page, sel)
+                                    if el.is_visible(timeout=2000):
+                                        el.hover()
+                                        page.wait_for_timeout(600)  # 툴팁 렌더링 대기
+                                        self.log_msg(f'  ✓ 호버: {desc}')
+                                        actions_done.append(f'호버: {desc}'); hovered = True
+                                except: pass
+                                if not hovered:
+                                    GENERIC_FALLBACK_WORDS = {'환자','등록','관리','메뉴','버튼','클릭','선택','확인','입력','검색','노출','화면','호버','hover','마우스'}
+                                    hints = re.findall(r'[가-힣a-zA-Z0-9]{2,}', desc)
+                                    for t in hints[:2]:
+                                        if hovered: break
+                                        for tag in ['button','label','a','span','div']:
+                                            try:
+                                                if t in GENERIC_FALLBACK_WORDS:
+                                                    el2 = page.locator(tag).get_by_text(t, exact=True).first
+                                                else:
+                                                    el2 = page.locator(f'{tag}:has-text("{t}")').first
+                                                if el2.is_visible(timeout=1000):
+                                                    el2.hover()
+                                                    page.wait_for_timeout(600)
+                                                    self.log_msg(f'  ✓ 호버(폴백): {t}')
+                                                    actions_done.append(f'호버: {t}'); hovered = True; break
+                                            except: continue
+                                if not hovered and ('좌측' in depth or '왼쪽' in depth):
+                                    refs = re.findall(r'\[([^\]]+)\]', depth)
+                                    for ref in refs:
+                                        if hovered: break
+                                        try:
+                                            ref_el = page.locator(f'button:has-text("{ref}")').first
+                                            if ref_el.count() == 0: continue
+                                            sibling = ref_el.locator('xpath=preceding-sibling::*[1]')
+                                            if sibling.count() > 0 and sibling.first.is_visible(timeout=1000):
+                                                sibling.first.hover()
+                                                page.wait_for_timeout(600)
+                                                self.log_msg(f'  ✓ 호버(위치기반 폴백, "{ref}" 좌측 요소)', 'info')
+                                                actions_done.append(f'호버: {ref} 좌측 아이콘'); hovered = True
+                                        except: continue
+                                if not hovered:
+                                    self.log_msg(f'  ✗ 호버 실패: {desc}', 'warn')
+                                    actions_done.append(f'호버 실패: {desc}')
 
                             elif atype == 'wait':
                                 ms = min(int(action.get('ms',1000)),3000)
