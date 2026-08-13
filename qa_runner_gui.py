@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.23'
+APP_VERSION = '4.24'
 
 # [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
 # 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
@@ -1256,6 +1256,38 @@ JSON: {{"actions":[
                                                         page.wait_for_timeout(800)
                                                 self.log_msg(f'  ✓ 클릭(아이콘 폴백): {t}')
                                                 actions_done.append(f'클릭: {t}'); clicked = True
+                                        except: continue
+                                if not clicked and ('좌측' in depth or '왼쪽' in depth):
+                                    # [FIX] 텍스트도 aria-label도 없는 순수 아이콘 버튼(예: 엑셀
+                                    # 다운로드 격자 아이콘)은 hover해야 툴팁이 뜨는 방식이라
+                                    # 위 두 폴백으로도 못 찾음. TC 문구가 "[환자등록] 버튼
+                                    # 좌측에 위치한..." 처럼 기준 버튼과의 위치 관계로 설명된
+                                    # 경우, 그 기준 버튼을 먼저 찾은 뒤 바로 앞 형제 요소를
+                                    # 클릭한다.
+                                    refs = re.findall(r'\[([^\]]+)\]', depth)
+                                    for ref in refs:
+                                        if clicked: break
+                                        try:
+                                            ref_el = page.locator(f'button:has-text("{ref}")').first
+                                            if ref_el.count() == 0:
+                                                continue
+                                            sibling = ref_el.locator('xpath=preceding-sibling::*[1]')
+                                            if sibling.count() > 0 and sibling.first.is_visible(timeout=1000):
+                                                url_before_click5 = page.url
+                                                sibling.first.click()
+                                                try:
+                                                    page.wait_for_selector(
+                                                        'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                        timeout=1200, state='visible')
+                                                except Exception:
+                                                    try:
+                                                        page.wait_for_function(
+                                                            "prevUrl => window.location.href !== prevUrl",
+                                                            arg=url_before_click5, timeout=1500)
+                                                    except Exception:
+                                                        page.wait_for_timeout(800)
+                                                self.log_msg(f'  ✓ 클릭(위치기반 폴백, "{ref}" 좌측 요소)', 'info')
+                                                actions_done.append(f'클릭: {ref} 좌측 아이콘'); clicked = True
                                         except: continue
                                 if not clicked:
                                     self.log_msg(f'  ✗ 클릭 실패: {desc}', 'warn')
