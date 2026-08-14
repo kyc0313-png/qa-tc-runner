@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.26'
+APP_VERSION = '4.27'
 
 # [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
 # 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
@@ -1175,7 +1175,14 @@ JSON: {{"actions":[
                                             self.log_msg(f'  ✓ 클릭: {desc}')
                                             actions_done.append(f'클릭: {desc}'); clicked = True
                                 except: pass
-                                if not clicked:
+                                # [FIX] "[환자등록] 버튼 좌측에 위치한 격자형태의 아이콘"처럼
+                                # 기준 버튼과의 위치 관계로 아이콘을 설명하는 TC는, 여기서
+                                # "환자등록" 같은 힌트 단어가 먼저 매칭되어 기준 버튼 자체를
+                                # 잘못 클릭해버리는 문제가 있었음(정작 원하는 아이콘이 아님).
+                                # 이런 위치기반 설명 TC는 이 일반 힌트 단계를 건너뛰고
+                                # 아래 위치기반 폴백으로 바로 넘어가게 한다.
+                                is_positional_desc = ('좌측에 위치' in depth) or ('왼쪽에 위치' in depth)
+                                if not clicked and not is_positional_desc:
                                     # [FIX] "환자","등록","관리" 같은 범용 단어는 substring(has-text) 매칭 시
                                     # 화면 내 전혀 다른 요소("+환자 등록" 버튼 등)를 잘못 클릭할 수 있어
                                     # 이런 단어들은 exact 텍스트 매칭으로 제한한다.
@@ -1209,6 +1216,9 @@ JSON: {{"actions":[
                                                     actions_done.append(f'클릭: {t}'); clicked = True; break
                                             except: continue
                                         if clicked: break
+                                elif not clicked and is_positional_desc:
+                                    hints = re.findall(r'[가-힣a-zA-Z0-9]{2,}', desc)
+                                    GENERIC_FALLBACK_WORDS = {'환자','등록','관리','메뉴','버튼','클릭','선택','확인','입력','검색','노출','화면'}
                                 if not clicked:
                                     # [FIX] 페이지네이션 화살표(<, >, <<, >>)처럼 TC 설명은
                                     # "다음"/"이전"이라는 한글 단어로 되어 있지만 실제 화면엔
@@ -1303,7 +1313,13 @@ JSON: {{"actions":[
                                     for bref in bracket_refs:
                                         if clicked: break
                                         bref_clean = bref.strip()
-                                        if not bref_clean or len(bref_clean) > 10:
+                                        # [FIX] 길이 제한이 10자였을 때 "[환자 관리]"(TC 문구
+                                        # 거의 전부의 시작부에 등장) 같은 메뉴명까지 후보로
+                                        # 잡혀서, 이게 항상 먼저 매칭되어 진짜 타겟인
+                                        # "[3]","[<]" 같은 짧은 기호는 시도조차 못 하고
+                                        # 끝나버리는 문제가 있었음. 원래 의도(X, 숫자,
+                                        # 화살표 기호)에 맞게 2자 이하로 제한.
+                                        if not bref_clean or len(bref_clean) > 2:
                                             continue
                                         for tag in ['button','a','li','span','div']:
                                             try:
@@ -1416,22 +1432,28 @@ JSON: {{"actions":[
                                         actions_done.append(f'호버: {desc}'); hovered = True
                                 except: pass
                                 if not hovered:
+                                    # [FIX] "[환자등록] 버튼 좌측에 위치한..." 처럼 위치
+                                    # 관계로 설명된 아이콘은, 여기서 "환자등록" 같은 힌트가
+                                    # 먼저 매칭되어 기준 버튼 자체를 잘못 호버해버리는
+                                    # 문제가 있었음(TC78 사례). 이런 경우 이 단계를 건너뛴다.
+                                    is_positional_desc_h = ('좌측에 위치' in depth) or ('왼쪽에 위치' in depth)
                                     GENERIC_FALLBACK_WORDS = {'환자','등록','관리','메뉴','버튼','클릭','선택','확인','입력','검색','노출','화면','호버','hover','마우스'}
                                     hints = re.findall(r'[가-힣a-zA-Z0-9]{2,}', desc)
-                                    for t in hints[:2]:
-                                        if hovered: break
-                                        for tag in ['button','label','a','span','div']:
-                                            try:
-                                                if t in GENERIC_FALLBACK_WORDS:
-                                                    el2 = page.locator(tag).get_by_text(t, exact=True).first
-                                                else:
-                                                    el2 = page.locator(f'{tag}:has-text("{t}")').first
-                                                if el2.is_visible(timeout=1000):
-                                                    el2.hover()
-                                                    page.wait_for_timeout(600)
-                                                    self.log_msg(f'  ✓ 호버(폴백): {t}')
-                                                    actions_done.append(f'호버: {t}'); hovered = True; break
-                                            except: continue
+                                    if not is_positional_desc_h:
+                                        for t in hints[:2]:
+                                            if hovered: break
+                                            for tag in ['button','label','a','span','div']:
+                                                try:
+                                                    if t in GENERIC_FALLBACK_WORDS:
+                                                        el2 = page.locator(tag).get_by_text(t, exact=True).first
+                                                    else:
+                                                        el2 = page.locator(f'{tag}:has-text("{t}")').first
+                                                    if el2.is_visible(timeout=1000):
+                                                        el2.hover()
+                                                        page.wait_for_timeout(600)
+                                                        self.log_msg(f'  ✓ 호버(폴백): {t}')
+                                                        actions_done.append(f'호버: {t}'); hovered = True; break
+                                                except: continue
                                 if not hovered and ('좌측' in depth or '왼쪽' in depth):
                                     refs = re.findall(r'\[([^\]]+)\]', depth)
                                     for ref in refs:
