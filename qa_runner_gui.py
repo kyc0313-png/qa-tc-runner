@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.25'
+APP_VERSION = '4.26'
 
 # [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
 # 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
@@ -1291,6 +1291,53 @@ JSON: {{"actions":[
                                                 self.log_msg(f'  ✓ 클릭(위치기반 폴백, "{ref}" 좌측 요소)', 'info')
                                                 actions_done.append(f'클릭: {ref} 좌측 아이콘'); clicked = True
                                         except: continue
+                                if not clicked:
+                                    # [FIX] "[X]", "[3]" 처럼 TC 문구가 대괄호로 정확한
+                                    # 표시 텍스트를 명시하는 경우, 그 글자수가 1~2자라
+                                    # 기존 힌트 추출 정규식(2자 이상 한글/영문/숫자)에
+                                    # 아예 안 걸리거나 GENERIC 단어 처리에서 누락되던
+                                    # 문제가 있었음(팝업 닫기 [X] 버튼, 페이지네이션
+                                    # 숫자 버튼 [3] 등). 대괄호 안 텍스트를 그대로
+                                    # exact 매칭으로 시도한다.
+                                    bracket_refs = re.findall(r'\[([^\]]+)\]', depth)
+                                    for bref in bracket_refs:
+                                        if clicked: break
+                                        bref_clean = bref.strip()
+                                        if not bref_clean or len(bref_clean) > 10:
+                                            continue
+                                        for tag in ['button','a','li','span','div']:
+                                            try:
+                                                elb = page.locator(tag).get_by_text(bref_clean, exact=True).first
+                                                if elb.is_visible(timeout=800):
+                                                    url_before_b = page.url
+                                                    elb.click()
+                                                    try:
+                                                        page.wait_for_selector(
+                                                            'div[role="dialog"], .modal, [class*="modal"], [class*="popup"]',
+                                                            timeout=1000, state='visible')
+                                                    except Exception:
+                                                        try:
+                                                            page.wait_for_function(
+                                                                "prevUrl => window.location.href !== prevUrl",
+                                                                arg=url_before_b, timeout=1200)
+                                                        except Exception:
+                                                            page.wait_for_timeout(600)
+                                                    self.log_msg(f'  ✓ 클릭(대괄호 텍스트 폴백): {bref_clean}')
+                                                    actions_done.append(f'클릭: {bref_clean}'); clicked = True; break
+                                            except: continue
+                                    # 팝업 닫기([X]) 전용 셀렉터도 마지막으로 한 번 더 시도
+                                    if not clicked and any(r.strip().upper() in ('X','✕','×','CLOSE','닫기') for r in bracket_refs):
+                                        for csel in ['button[aria-label="close"]','button[aria-label="닫기"]',
+                                                     'button[aria-label="Close"]','button:has-text("×")',
+                                                     'button:has-text("✕")','[class*="close"]']:
+                                            try:
+                                                elc = page.locator(csel).first
+                                                if elc.is_visible(timeout=800):
+                                                    elc.click()
+                                                    page.wait_for_timeout(600)
+                                                    self.log_msg(f'  ✓ 클릭(닫기버튼 폴백): {csel}')
+                                                    actions_done.append('클릭: 팝업 닫기'); clicked = True; break
+                                            except: continue
                                 if not clicked:
                                     self.log_msg(f'  ✗ 클릭 실패: {desc}', 'warn')
                                     actions_done.append(f'클릭 실패: {desc}')
