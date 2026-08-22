@@ -20,6 +20,7 @@ jobs:
     - name: 패키지 설치
       run: |
         pip install pyinstaller playwright openai requests Pillow httpx certifi
+        pip install pyinstaller playwright openai requests Pillow httpx certifi anthropic
 
     - name: Playwright 브라우저 설치
       run: |
