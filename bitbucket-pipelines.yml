@@ -1,0 +1,11 @@
+image: alpine/git:latest
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: GitHub으로 미러 push (GitHub Actions 빌드/릴리즈 트리거)
+          script:
+            - git remote add github https://${GH_PAT}@github.com/kyc0313-png/qa-tc-runner.git
+            - git push github HEAD:main
+            - echo "GitHub으로 미러 push 완료 - GitHub Actions가 빌드를 시작합니다"
