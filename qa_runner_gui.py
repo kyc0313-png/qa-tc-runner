@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.29'
+APP_VERSION = '4.30'
 
 # [CHANGE] 이제부터는 "Bitbucket에서 코드 수정 → Bitbucket Pipeline이 GitHub으로
 # 자동 미러 push → 기존 GitHub Actions가 빌드/릴리즈"하는 방식으로 운영함.
@@ -83,6 +83,12 @@ def do_update(download_url, root):
 
     # PID로 현재 프로세스가 완전히 끝날 때까지 명시적으로 대기 (taskkill 보다 안전하게 polling)
     pid = os.getpid()
+    # [FIX] 기존에는 파일 교체 후 배치파일이 "start"로 exe를 자동 재실행시켰는데,
+    # 사내 보안 프로그램(백신/EDR)이 이 "배치파일이 몰래 프로그램을 실행하는" 패턴을
+    # 의심스러운 행위로 보고 "Security validation failure: failed to obtain
+    # executable path for parent process!" 오류로 차단하는 사례가 확인됨. 사람이
+    # 직접 더블클릭해서 여는 건 문제없이 되는 것으로 보아, 자동 재실행 자체를
+    # 없애고 "업데이트 완료, 직접 다시 실행해주세요" 안내만 하도록 변경.
     bat_content = f"""@echo off
 setlocal enabledelayedexpansion
 set "EXE_PATH={exe_path}"
@@ -112,7 +118,6 @@ if exist "%NEW_PATH%" (
     goto retry
 )
 echo SUCCESS >> "%LOG_PATH%"
-start "" "%EXE_PATH%"
 
 :end
 del "%~f0"
@@ -121,6 +126,7 @@ del "%~f0"
         f.write(bat_content)
 
     subprocess.Popen(['cmd', '/c', bat_path], cwd=exe_dir, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    messagebox.showinfo('업데이트 완료', '업데이트가 완료되었습니다.\n프로그램을 다시 실행해 주세요.')
     root.quit()
     root.destroy()
     os._exit(0)
