@@ -19,16 +19,12 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.27'
+APP_VERSION = '4.28'
 
-# [REVERT] Bitbucket Downloads 연동 코드를 GitHub Releases 방식으로 되돌림.
-# 이유: 빗버킷 이관이 아직 확정/완료되지 않았는데(워크스페이스명 미확정) 업데이트
-# 체크 로직만 먼저 Bitbucket을 바라보도록 바뀌어서, 존재하지 않는 워크스페이스를
-# 조회하다 조용히 실패 → "업데이트 없음"으로 끝나 4.22가 배포돼도 기존 사용자들이
-# 자동 업데이트를 못 받는 문제가 있었음. 빗버킷 이관이 실제로 완료되면 아래
-# GITHUB_RELEASE_URL 블록을 다시 BITBUCKET_* 블록으로 교체하면 됨(이 파일 하단
-# BITBUCKET 관련 코드는 참고용으로 남겨두지 않고 삭제했으니, 필요 시 이전 버전
-# 커밋 이력에서 다시 가져올 것).
+# [CHANGE] 이제부터는 "Bitbucket에서 코드 수정 → Bitbucket Pipeline이 GitHub으로
+# 자동 미러 push → 기존 GitHub Actions가 빌드/릴리즈"하는 방식으로 운영함.
+# 실제 릴리즈(exe 배포)는 계속 GitHub에서 발생하므로, 업데이트 체크도 GitHub
+# 하나만 보면 충분함 (Bitbucket Downloads는 이번 방식에서는 사용하지 않음).
 GITHUB_RELEASE_URL = 'https://api.github.com/repos/kyc0313-png/qa-tc-runner/releases/latest'
 
 def get_latest_release_info():
