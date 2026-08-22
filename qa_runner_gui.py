@@ -19,7 +19,7 @@ if getattr(sys, 'frozen', False):
     os.environ['REQUESTS_CA_BUNDLE'] = certifi.where()
 
 EC2_API = 'https://qa.healthkoob.com'
-APP_VERSION = '4.28'
+APP_VERSION = '4.29'
 
 # [CHANGE] 이제부터는 "Bitbucket에서 코드 수정 → Bitbucket Pipeline이 GitHub으로
 # 자동 미러 push → 기존 GitHub Actions가 빌드/릴리즈"하는 방식으로 운영함.
@@ -388,9 +388,37 @@ class QAWorkerApp:
         self.ec2_var = tk.StringVar(value=EC2_API)
         lbl('EC2 주소', 0); ent(self.ec2_var, 0)
 
-        # API 키
-        self.key_var = tk.StringVar(value=os.environ.get('OPENAI_API_KEY',''))
-        lbl('OpenAI API 키', 1); ent(self.key_var, 1, show='*')
+        # AI Provider + API 키 (같은 행에 결합해 기존 행 번호 유지)
+        self.provider_var = tk.StringVar(value='OpenAI')
+        lbl('AI Provider', 1)
+        pf = tk.Frame(frame, bg=BG)
+        pf.grid(row=1, column=1, pady=4, padx=(6,0), sticky='ew')
+        provider_combo = ttk.Combobox(pf, textvariable=self.provider_var,
+            values=['OpenAI', 'Claude'], state='readonly',
+            font=('맑은 고딕',10), width=10)
+        provider_combo.pack(side='left')
+        self.key_var = tk.StringVar(value=os.environ.get('OPENAI_API_KEY','') or os.environ.get('ANTHROPIC_API_KEY',''))
+        key_entry = tk.Entry(pf, textvariable=self.key_var, font=('맑은 고딕',10), width=20, show='*')
+        key_entry.pack(side='left', padx=(6,0))
+        self.key_label_hint = tk.Label(pf, text='(API 키)', font=('맑은 고딕',9), bg=BG, fg='#aaa')
+        self.key_label_hint.pack(side='left', padx=(4,0))
+
+        # 모델명 (Provider별 기본값 자동 세팅, 필요시 직접 수정 가능)
+        DEFAULT_MODELS = {
+            'OpenAI': {'action': 'gpt-5.6-luna', 'judge': 'gpt-5.6-terra'},
+            'Claude': {'action': 'claude-sonnet-5', 'judge': 'claude-sonnet-5'},
+        }
+        self.action_model_var = tk.StringVar(value=DEFAULT_MODELS['OpenAI']['action'])
+        self.judge_model_var = tk.StringVar(value=DEFAULT_MODELS['OpenAI']['judge'])
+
+        def on_provider_change(*args):
+            provider = self.provider_var.get()
+            self.action_model_var.set(DEFAULT_MODELS[provider]['action'])
+            self.judge_model_var.set(DEFAULT_MODELS[provider]['judge'])
+            self.key_label_hint.config(
+                text='(sk-...)' if provider == 'OpenAI' else '(sk-ant-...)')
+        provider_combo.bind('<<ComboboxSelected>>', on_provider_change)
+        on_provider_change()
 
         # STG URL (읽기전용)
         self.stg_url_var = tk.StringVar(value='세션 선택 후 자동 설정')
@@ -640,7 +668,7 @@ class QAWorkerApp:
 
     def start_worker(self):
         if not self.session_var.get(): messagebox.showerror('오류','세션을 선택하세요'); return
-        if not self.key_var.get(): messagebox.showerror('오류','OpenAI API 키를 입력하세요'); return
+        if not self.key_var.get(): messagebox.showerror('오류','API 키를 입력하세요'); return
         self.running = True
         self.start_btn.configure(state='disabled')
         self.stop_btn.configure(state='normal')
@@ -651,11 +679,43 @@ class QAWorkerApp:
         self.running = False
         self.log_msg('⏹ 중지 요청됨...', 'warn')
 
+    def _to_claude_content(self, openai_style_content):
+        """OpenAI 스타일 content 블록 리스트를 Anthropic(Claude) 형식으로 변환"""
+        converted = []
+        for block in openai_style_content:
+            if block.get('type') == 'text':
+                converted.append({'type': 'text', 'text': block['text']})
+            elif block.get('type') == 'image_url':
+                b64_data = block['image_url']['url'].split(',', 1)[-1]
+                converted.append({
+                    'type': 'image',
+                    'source': {'type': 'base64', 'media_type': 'image/png', 'data': b64_data}
+                })
+        return converted
+
+    def call_ai(self, client, provider, model, content, max_tokens, timeout=None):
+        """provider(OpenAI/Claude)에 따라 API를 통일된 방식으로 호출하고 텍스트 응답만 반환.
+        content는 문자열이거나 OpenAI 스타일 content 블록 리스트(텍스트+이미지) 둘 다 지원."""
+        if provider == 'Claude':
+            msg_content = content if isinstance(content, str) else self._to_claude_content(content)
+            resp = client.messages.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[{'role': 'user', 'content': msg_content}]
+            )
+            return ''.join(b.text for b in resp.content if getattr(b, 'type', '') == 'text')
+        else:
+            kwargs = {'model': model, 'messages': [{'role': 'user', 'content': content}],
+                      'max_completion_tokens': max_tokens}
+            if timeout: kwargs['timeout'] = timeout
+            resp = client.chat.completions.create(**kwargs)
+            return resp.choices[0].message.content
+
     def run_worker(self):
-        import openai
         try:
             ec2 = self.ec2_var.get().rstrip('/')
             api_key = self.key_var.get()
+            provider = self.provider_var.get()
             limit = int(self.limit_var.get() or 0)
             info = self.session_map.get(self.session_var.get(), {})
             session_id = info.get('id',0) if isinstance(info,dict) else 0
@@ -679,7 +739,12 @@ class QAWorkerApp:
             self.log_msg(f'🌐 STG: {stg_base}', 'info')
 
             priority = self.priority_var.get()
-            client = openai.OpenAI(api_key=api_key, http_client=httpx.Client(verify=False))
+            if provider == 'Claude':
+                import anthropic
+                client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(verify=False))
+            else:
+                import openai
+                client = openai.OpenAI(api_key=api_key, http_client=httpx.Client(verify=False))
 
             # 선택된 TC
             selected_indices = list(self.tc_listbox.curselection())
@@ -999,16 +1064,13 @@ JSON: {{"actions":[
                         actions = []
                         for attempt in range(3):
                             try:
-                                r = client.chat.completions.create(
-                                    model='gpt-5.6-luna',
-                                    messages=[{'role':'user','content':prompt_action}],
-                                    # [FIX] 600 토큰은 추론형 모델이 내부 추론에 다 써버리면
-                                    # 화면에 보일 JSON 응답이 아예 안 나오는 경우가 있었음
-                                    # (특히 TC44~51처럼 검증 항목이 많은 복잡한 TC에서
-                                    # "Expecting value: char 0" = 완전 빈 응답으로 반복 실패).
-                                    # 여유 있게 올려서 추론 + 실제 출력 둘 다 감당하게 함.
-                                    max_completion_tokens=1500, timeout=50)
-                                content = r.choices[0].message.content
+                                # [FIX] 600 토큰은 추론형 모델이 내부 추론에 다 써버리면
+                                # 화면에 보일 JSON 응답이 아예 안 나오는 경우가 있었음
+                                # (특히 TC44~51처럼 검증 항목이 많은 복잡한 TC에서
+                                # "Expecting value: char 0" = 완전 빈 응답으로 반복 실패).
+                                # 여유 있게 올려서 추론 + 실제 출력 둘 다 감당하게 함.
+                                content = self.call_ai(client, provider, self.action_model_var.get(),
+                                                        prompt_action, 1500, timeout=50)
                                 if not content or not content.strip():
                                     raise ValueError('빈 응답 (추론 토큰 소모로 출력 없음)')
                                 raw = re.sub(r'```json|```','', content.strip()).strip()
@@ -1591,21 +1653,21 @@ JSON: {{"actions":[
                             ]
                         content_msgs.append({'type':'text','text':'JSON으로만: {"judgment":"PASS","reason":"근거"} 또는 {"judgment":"FAIL","reason":"근거"}'})
 
-                        r2 = None
+                        raw2_text = None
                         for attempt in range(3):
                             try:
-                                r2 = client.chat.completions.create(
-                                    model='gpt-5.6-terra',
-                                    messages=[{'role':'user','content':content_msgs}],
-                                    max_completion_tokens=400, timeout=60)
+                                raw2_text = self.call_ai(client, provider, self.judge_model_var.get(),
+                                                          content_msgs, 400, timeout=60)
+                                if not raw2_text or not raw2_text.strip():
+                                    raise ValueError('빈 응답')
                                 break
                             except Exception as api_err:
                                 if attempt < 2:
-                                    self.log_msg(f'  ⚠ GPT 호출 재시도 ({attempt+1}/3): {str(api_err)[:80]}', 'warn')
+                                    self.log_msg(f'  ⚠ 판정 호출 재시도 ({attempt+1}/3): {str(api_err)[:80]}', 'warn')
                                     page.wait_for_timeout(2000)
                                 else:
                                     raise
-                        raw2 = re.sub(r'```json|```','',r2.choices[0].message.content.strip()).strip()
+                        raw2 = re.sub(r'```json|```','', raw2_text.strip()).strip()
                         parsed = json.loads(raw2)
                         judgment = parsed.get('judgment','FAIL')
                         reason = parsed.get('reason','')
